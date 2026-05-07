@@ -1,0 +1,13 @@
+[project]
+name = "voice-input-mimo-server"
+version = "0.1.0"
+description = "MiMo-V2.5-ASR FastAPI server (Whisper-compatible) for voice-input-mimo"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "mimo-mlx>=0.1.0",
+    "fastapi>=0.115",
+    "uvicorn>=0.30",
+    "python-multipart>=0.0.9",
+    "soundfile>=0.12",
+    "huggingface_hub>=0.20",
+]

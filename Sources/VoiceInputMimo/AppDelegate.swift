@@ -14,13 +14,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var enableMenuItem: NSMenuItem!
     private var llmMenuItem: NSMenuItem!
     private var claudeCodeMenuItem: NSMenuItem!
+    private var asrServerMenuItem: NSMenuItem!
+    private var asrServerStatusMenuItem: NSMenuItem!
     private lazy var settingsWindow = SettingsWindow()
     private lazy var clipboardHistoryWindow = ClipboardHistoryWindow()
 
     // Phase progress timer (drives the elapsed-time counter shown in the overlay)
     private var phaseTimer: Timer?
     private var phaseStart: Date?
-    private var phasePrefix: String = ""
+    private var phaseBuilder: ((Double) -> OverlayPanel.Phase)?
+
+    // Last-seen ZH transcript, kept across LLM refining so refining/bothReady phases
+    // can show the original text alongside the translated output.
+    private var currentZH: String = ""
+
+    // Cancellable "show .refining after holding ZH for 0.4 s" deferred work.
+    // If the LLM completes within 0.4 s we cancel this so the overlay isn't
+    // resurrected back to .refining after .bothReady.
+    private var refiningHoldWork: DispatchWorkItem?
 
     // MARK: - Lifecycle
 
@@ -55,11 +66,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         keyMonitor.onFnUp = { [weak self] in self?.fnUp() }
 
         // Probe ASR server in the background to surface readiness in menu/log
-        ASRClient.shared.health { result in
-            if case .failure(let error) = result {
-                NSLog("[AppDelegate] ASR server probe failed: %@", error.localizedDescription)
-            }
+        LocalASRServer.shared.onStateChange = { [weak self] _ in
+            DispatchQueue.main.async { self?.refreshASRServerMenu() }
         }
+        LocalASRServer.shared.refresh { [weak self] _ in
+            DispatchQueue.main.async { self?.refreshASRServerMenu() }
+        }
+    }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        LocalASRServer.shared.stop()
     }
 
     // MARK: - Key events
@@ -69,10 +85,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         LLMRefiner.shared.cancel()
         ASRClient.shared.cancel()
         isRecording = true
+        currentZH = ""
 
         updateStatusIcon(recording: true)
-        overlayPanel.show(text: "🎙 Recording 0.0s")
-        startPhaseTimer(prefix: "🎙 Recording")
+        overlayPanel.transition(to: .recording(elapsed: 0))
+        startPhaseTimer { .recording(elapsed: $0) }
         NSSound(named: .init("Tink"))?.play()
 
         audioRecorder.startRecording()
@@ -86,84 +103,97 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let wavURL = audioRecorder.stopRecording()
         guard let wavURL else {
-            overlayPanel.updateText("⚠️ No audio")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                self?.overlayPanel.dismiss()
-            }
+            overlayPanel.transition(to: .error("No audio captured"))
             return
         }
 
         // Stage 1: ASR (MiMo via :8765)
-        overlayPanel.updateText("📝 Transcribing 0.0s")
-        startPhaseTimer(prefix: "📝 Transcribing")
+        overlayPanel.transition(to: .transcribing(elapsed: 0))
+        startPhaseTimer { .transcribing(elapsed: $0) }
         ASRClient.shared.transcribe(wavURL: wavURL) { [weak self] result in
             guard let self else { return }
             self.stopPhaseTimer()
             switch result {
-            case .success(let text):
-                self.handleTranscription(text)
+            case .success(let asrResult):
+                self.handleTranscription(asrResult.text, requestId: asrResult.requestId)
             case .failure(let error):
                 NSLog("[AppDelegate] ASR failed: %@", error.localizedDescription)
-                self.overlayPanel.updateText("❌ ASR: \(error.localizedDescription)")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
-                    self.overlayPanel.dismiss()
-                }
+                self.overlayPanel.transition(to: .error("ASR: \(error.localizedDescription)"))
             }
         }
     }
 
-    private func handleTranscription(_ text: String) {
+    private func handleTranscription(_ text: String, requestId: String) {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            overlayPanel.updateText("⚠️ No speech detected")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) { [weak self] in
-                self?.overlayPanel.dismiss()
-            }
+            overlayPanel.transition(to: .error("No speech detected"))
             return
         }
-
-        // Show the raw transcription so user can see what MiMo heard
-        overlayPanel.updateText("💬 \(trimmed)")
+        currentZH = trimmed
+        overlayPanel.transition(to: .zhReady(zh: trimmed))
 
         let refiner = LLMRefiner.shared
         if refiner.isEnabled && refiner.isConfigured {
-            // Stage 2: LLM cleanup / translate
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            // Stage 2: LLM cleanup / translate. Hold ZH for ~0.4 s so user sees
+            // it clearly before the refining indicator appears — but only if
+            // the LLM is actually slower than 0.4 s. Cancel the deferred work
+            // when the result arrives early, otherwise we'd resurrect the
+            // overlay back into .refining and start a phase timer that nobody
+            // stops (orphan tick → "Refining 42.7s" stuck).
+            refiningHoldWork?.cancel()
+            let work = DispatchWorkItem { [weak self] in
                 guard let self else { return }
-                self.overlayPanel.updateText("✨ Refining 0.0s")
-                self.startPhaseTimer(prefix: "✨ Refining")
+                self.overlayPanel.transition(to: .refining(zh: self.currentZH, elapsed: 0))
+                self.startPhaseTimer { [weak self] elapsed in
+                    .refining(zh: self?.currentZH ?? "", elapsed: elapsed)
+                }
             }
-            refiner.refine(trimmed) { [weak self] result in
+            refiningHoldWork = work
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
+
+            refiner.refine(trimmed, requestId: requestId) { [weak self] result in
                 guard let self else { return }
+                self.refiningHoldWork?.cancel()
+                self.refiningHoldWork = nil
                 self.stopPhaseTimer()
                 switch result {
                 case .success(let refined):
                     let final = refined.isEmpty ? trimmed : refined
-                    self.injectAndDismiss(final)
+                    self.completeWithEnglish(final)
                 case .failure(let error):
                     NSLog("[AppDelegate] LLM failed: %@", error.localizedDescription)
-                    self.overlayPanel.updateText("❌ LLM: \(error.localizedDescription)")
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
-                        self.injectAndDismiss(trimmed)
+                    self.overlayPanel.transition(to: .error("LLM: \(error.localizedDescription)"))
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
+                        self?.injectImmediately(trimmed)
                     }
                 }
             }
         } else {
+            // ASR-only path: show ZH for a moment, then inject.
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-                self?.injectAndDismiss(trimmed)
+                self?.completeWithoutTranslation(trimmed)
             }
         }
     }
 
-    private func injectAndDismiss(_ text: String) {
-        overlayPanel.updateText("✨ \(text)")
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in
-            self?.overlayPanel.dismiss()
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                self?.textInjector.inject(text)
-                NSSound(named: .init("Pop"))?.play()
-            }
-        }
+    /// LLM succeeded: show ZH + EN side-by-side for the linger window, then inject
+    /// the English. Overlay handles dismissal internally after `overlayLingerSeconds`.
+    private func completeWithEnglish(_ english: String) {
+        overlayPanel.transition(to: .bothReady(zh: currentZH, en: english))
+        injectImmediately(english)
+    }
+
+    /// ASR-only path: still show the final state with the same text in both rows
+    /// for a consistent visual; reuse zhReady (no EN row) for clarity.
+    private func completeWithoutTranslation(_ text: String) {
+        // Promote to bothReady with EN duplicated, so the linger countdown engages.
+        overlayPanel.transition(to: .bothReady(zh: text, en: text))
+        injectImmediately(text)
+    }
+
+    private func injectImmediately(_ text: String) {
+        textInjector.inject(text)
+        NSSound(named: .init("Pop"))?.play()
     }
 
     // MARK: - Conflict detection
@@ -207,15 +237,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Phase progress timer
 
-    private func startPhaseTimer(prefix: String) {
+    private func startPhaseTimer(builder: @escaping (Double) -> OverlayPanel.Phase) {
         stopPhaseTimer()
-        phasePrefix = prefix
+        phaseBuilder = builder
         phaseStart = Date()
-        // Update every 100ms (smooth feel)
         let t = Timer(timeInterval: 0.1, repeats: true) { [weak self] _ in
-            guard let self, let start = self.phaseStart else { return }
+            guard let self, let start = self.phaseStart, let make = self.phaseBuilder else { return }
             let elapsed = Date().timeIntervalSince(start)
-            self.overlayPanel.updateText(String(format: "%@ %.1fs", self.phasePrefix, elapsed))
+            self.overlayPanel.transition(to: make(elapsed))
         }
         RunLoop.main.add(t, forMode: .common)
         phaseTimer = t
@@ -225,6 +254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         phaseTimer?.invalidate()
         phaseTimer = nil
         phaseStart = nil
+        phaseBuilder = nil
     }
 
     // MARK: - Audio callbacks
@@ -235,10 +265,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         audioRecorder.onError = { [weak self] msg in
             self?.stopPhaseTimer()
-            self?.overlayPanel.updateText("❌ Audio: \(msg)")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) {
-                self?.overlayPanel.dismiss()
-            }
+            self?.overlayPanel.transition(to: .error("Audio: \(msg)"))
         }
     }
 
@@ -287,6 +314,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         llmItem.submenu = llmMenu
         menu.addItem(llmItem)
+
+        // ASR Server submenu
+        let asrItem = NSMenuItem(title: "ASR Server", action: nil, keyEquivalent: "")
+        let asrSubmenu = NSMenu()
+
+        asrServerStatusMenuItem = NSMenuItem(title: "Status: …", action: nil, keyEquivalent: "")
+        asrServerStatusMenuItem.isEnabled = false
+        asrSubmenu.addItem(asrServerStatusMenuItem)
+
+        asrSubmenu.addItem(.separator())
+
+        asrServerMenuItem = NSMenuItem(
+            title: "Start Local ASR Server",
+            action: #selector(toggleASRServer),
+            keyEquivalent: ""
+        )
+        asrServerMenuItem.target = self
+        asrSubmenu.addItem(asrServerMenuItem)
+
+        let showLogItem = NSMenuItem(title: "Show Log…", action: #selector(showASRLog), keyEquivalent: "")
+        showLogItem.target = self
+        asrSubmenu.addItem(showLogItem)
+
+        let revealScriptItem = NSMenuItem(title: "Reveal Script…", action: #selector(revealASRScript), keyEquivalent: "")
+        revealScriptItem.target = self
+        asrSubmenu.addItem(revealScriptItem)
+
+        asrItem.submenu = asrSubmenu
+        menu.addItem(asrItem)
 
         // Clipboard History viewer
         let historyItem = NSMenuItem(
@@ -357,6 +413,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func openClipboardHistory() {
         clipboardHistoryWindow.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    // MARK: - ASR server controls
+
+    @objc private func toggleASRServer() {
+        let server = LocalASRServer.shared
+        switch server.state {
+        case .running:
+            server.stop()
+            refreshASRServerMenu()
+        case .starting:
+            // No-op; user double-clicked while spinning up.
+            break
+        case .stopped, .failed:
+            asrServerMenuItem.isEnabled = false
+            asrServerStatusMenuItem.title = "Status: starting…"
+            server.start { [weak self] result in
+                DispatchQueue.main.async {
+                    self?.refreshASRServerMenu()
+                    if case .failure(let error) = result {
+                        self?.showAlert(title: "ASR Server Failed to Start",
+                                        message: error.localizedDescription)
+                    }
+                }
+            }
+        }
+    }
+
+    @objc private func showASRLog() {
+        let url = LocalASRServer.shared.logURL
+        if !FileManager.default.fileExists(atPath: url.path) {
+            FileManager.default.createFile(atPath: url.path, contents: Data())
+        }
+        NSWorkspace.shared.open(url)
+    }
+
+    @objc private func revealASRScript() {
+        let path = LocalASRServer.Configuration.current().serverDir
+        let url = URL(fileURLWithPath: path)
+        if FileManager.default.fileExists(atPath: path) {
+            NSWorkspace.shared.activateFileViewerSelecting([url])
+        } else {
+            showAlert(title: "Server Directory Not Found",
+                      message: "Expected at:\n\(path)\n\nAdjust via Settings… → ASR Server.")
+        }
+    }
+
+    private func refreshASRServerMenu() {
+        let state = LocalASRServer.shared.state
+        let port = LocalASRServer.Configuration.current().port
+        switch state {
+        case .running:
+            asrServerStatusMenuItem.title = "Status: running on :\(port)"
+            asrServerMenuItem.title = "Stop Local ASR Server"
+            asrServerMenuItem.isEnabled = true
+        case .starting:
+            asrServerStatusMenuItem.title = "Status: starting…"
+            asrServerMenuItem.title = "Starting…"
+            asrServerMenuItem.isEnabled = false
+        case .stopped:
+            asrServerStatusMenuItem.title = "Status: stopped"
+            asrServerMenuItem.title = "Start Local ASR Server"
+            asrServerMenuItem.isEnabled = true
+        case .failed(let msg):
+            let oneLine = msg.replacingOccurrences(of: "\n", with: " ")
+            asrServerStatusMenuItem.title = "Status: failed — \(oneLine.prefix(60))"
+            asrServerMenuItem.title = "Retry Start"
+            asrServerMenuItem.isEnabled = true
+        }
     }
 
     @objc private func quit() {

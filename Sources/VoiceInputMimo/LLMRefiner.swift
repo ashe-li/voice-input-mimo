@@ -5,8 +5,10 @@ private let logger = Logger(subsystem: "com.yetone.VoiceInput", category: "LLMRe
 
 private func logToFile(_ message: String) {
     let msg = "[\(ISO8601DateFormatter().string(from: Date()))] \(message)\n"
-    let logURL = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Logs/VoiceInput.log")
+    let dir = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Logs/VoiceInputMimo", isDirectory: true)
+    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let logURL = dir.appendingPathComponent("llm.log")
     if let handle = try? FileHandle(forWritingTo: logURL) {
         handle.seekToEndOfFile()
         handle.write(msg.data(using: .utf8)!)
@@ -130,7 +132,7 @@ final class LLMRefiner {
         characters, no trailing newline.
         """
 
-    func refine(_ text: String, mode: RefineMode? = nil, force: Bool = false,
+    func refine(_ text: String, requestId: String = "", mode: RefineMode? = nil, force: Bool = false,
                 completion: @escaping (Result<String, Error>) -> Void) {
         guard force || (isEnabled && isConfigured) else {
             completion(.success(text))
@@ -150,6 +152,9 @@ final class LLMRefiner {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        if !requestId.isEmpty {
+            request.setValue(requestId, forHTTPHeaderField: "X-Request-Id")
+        }
         request.timeoutInterval = 90  // Qwen3 reasoning models can take 30s+ per inference
 
         let body: [String: Any] = [
@@ -164,30 +169,31 @@ final class LLMRefiner {
             "max_tokens": 600,
         ]
 
-        logToFile("Request: \(url.absoluteString) model=\(model) mode=\(resolvedMode.rawValue)")
+        let logTag = requestId.isEmpty ? "" : "[req=\(requestId)] "
+        logToFile("\(logTag)Request: \(url.absoluteString) model=\(model) mode=\(resolvedMode.rawValue)")
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         let suffixToAppend = (resolvedMode == .claudeCode) ? claudeCodeSuffix : ""
 
         currentTask = URLSession.shared.dataTask(with: request) { data, _, error in
             if let error {
-                logToFile("Network error: \(error.localizedDescription)")
+                logToFile("\(logTag)Network error: \(error.localizedDescription)")
                 DispatchQueue.main.async { completion(.failure(error)) }
                 return
             }
             guard let data else {
-                logToFile("No data in response")
+                logToFile("\(logTag)No data in response")
                 DispatchQueue.main.async { completion(.failure(RefinerError.invalidResponse)) }
                 return
             }
             if let raw = String(data: data, encoding: .utf8) {
-                logToFile("Response: \(raw)")
+                logToFile("\(logTag)Response: \(raw)")
             }
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let choices = json["choices"] as? [[String: Any]],
                   let message = choices.first?["message"] as? [String: Any]
             else {
-                logToFile("Failed to parse response")
+                logToFile("\(logTag)Failed to parse response")
                 DispatchQueue.main.async { completion(.failure(RefinerError.invalidResponse)) }
                 return
             }
@@ -198,11 +204,11 @@ final class LLMRefiner {
             if content.isEmpty {
                 let usage = json["usage"] as? [String: Any]
                 let finishReason = (choices.first?["finish_reason"] as? String) ?? "?"
-                logToFile("WARN: empty content. finish=\(finishReason) usage=\(usage ?? [:])")
+                logToFile("\(logTag)WARN: empty content. finish=\(finishReason) usage=\(usage ?? [:])")
             }
             let refined = content.trimmingCharacters(in: .whitespacesAndNewlines)
             let finalText = suffixToAppend.isEmpty ? refined : "\(refined)\(suffixToAppend)"
-            logToFile("Refined (\(resolvedMode.rawValue)): '\(text)' -> '\(refined)' (suffix=\(suffixToAppend.count) chars)")
+            logToFile("\(logTag)Refined (\(resolvedMode.rawValue)): '\(text)' -> '\(refined)' (suffix=\(suffixToAppend.count) chars)")
             DispatchQueue.main.async { completion(.success(finalText)) }
         }
         currentTask?.resume()

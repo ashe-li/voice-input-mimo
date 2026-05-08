@@ -1,11 +1,18 @@
 import Foundation
 
+/// Result of a transcribe call. requestId is propagated as `X-Request-Id` so
+/// downstream LLM refiner / engine logs can grep the same id end-to-end.
+struct TranscribeResult {
+    let text: String
+    let requestId: String
+}
+
 /// HTTP client for the local MiMo-V2.5-ASR FastAPI server (Whisper-compatible).
 final class ASRClient {
     static let shared = ASRClient()
 
     var baseURL: String {
-        get { UserDefaults.standard.string(forKey: "asrBaseURL") ?? "http://127.0.0.1:8765" }
+        get { UserDefaults.standard.string(forKey: "asrBaseURL") ?? "http://127.0.0.1:8766" }
         set { UserDefaults.standard.set(newValue, forKey: "asrBaseURL") }
     }
 
@@ -23,18 +30,26 @@ final class ASRClient {
 
     private var currentTask: URLSessionDataTask?
 
-    func transcribe(wavURL: URL, completion: @escaping (Result<String, Error>) -> Void) {
+    func transcribe(wavURL: URL, completion: @escaping (Result<TranscribeResult, Error>) -> Void) {
         let trimmed = baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL
         guard let url = URL(string: "\(trimmed)/v1/audio/transcriptions") else {
             completion(.failure(ASRError.invalidURL))
             return
         }
 
+        // request_id derived from wav filename (already contains timestamp +
+        // UUID from RecordingArchive) so the same id appears in:
+        //   - voice-input app NSLog
+        //   - engine.log / transcribe.jsonl
+        //   - LLM refiner log
+        let requestId = wavURL.deletingPathExtension().lastPathComponent
+
         let boundary = "----VoiceInputMimo-\(UUID().uuidString)"
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
         request.timeoutInterval = 60
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.setValue(requestId, forHTTPHeaderField: "X-Request-Id")
 
         guard let audioData = try? Data(contentsOf: wavURL) else {
             completion(.failure(ASRError.fileReadFailed))
@@ -74,7 +89,7 @@ final class ASRClient {
                 if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                    let text = json["text"] as? String {
                     let raw = json["raw_text"] as? String ?? "(same)"
-                    NSLog("[ASRClient] ASR result: text='%@' raw='%@'", text, raw)
+                    NSLog("[ASRClient] [req=%@] ASR result: text='%@' raw='%@'", requestId, text, raw)
                 }
             }
 
@@ -99,7 +114,10 @@ final class ASRClient {
                 DispatchQueue.main.async { completion(.failure(ASRError.invalidResponse)) }
                 return
             }
-            DispatchQueue.main.async { completion(.success(text.trimmingCharacters(in: .whitespacesAndNewlines))) }
+            let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+            DispatchQueue.main.async {
+                completion(.success(TranscribeResult(text: cleaned, requestId: requestId)))
+            }
         }
         currentTask?.resume()
     }

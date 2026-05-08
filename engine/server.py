@@ -325,6 +325,8 @@ async def transcribe(
         except OSError:
             pass
         idle_status = asr_model.idle_window.status() if asr_model.idle_window is not None else None
+        # snapshot() uses TTL cache (default 5s). Hot path = no vmmap subprocess.
+        snap = tracker.snapshot()
         emit_request_jsonl({
             "request_id": request_id,
             "event": "transcribe",
@@ -345,15 +347,16 @@ async def transcribe(
             "error": err,
             "asr_idle_level": idle_status["level"] if idle_status else None,
             "asr_idle_window_s": idle_status["current_window_seconds"] if idle_status else None,
-            "phys_mb": tracker.snapshot().get("phys_mb"),
-            "rss_mb": tracker.snapshot().get("rss_mb"),
+            "phys_mb": snap.get("phys_mb"),
+            "rss_mb": snap.get("rss_mb"),
         })
 
 
 @app.get("/admin/memory")
 def admin_memory():
+    # Admin diagnostics — bypass TTL cache, force fresh vmmap.
     return {
-        "memory": tracker.snapshot(),
+        "memory": tracker.snapshot(fresh=True),
         "asr": asr_model.status(),
         "qwen": qwen_manager.status() if qwen_manager is not None else {"enabled": False},
     }
@@ -365,7 +368,7 @@ async def admin_evict():
     return {
         "evicted": True,
         "after": {
-            "memory": tracker.snapshot(),
+            "memory": tracker.snapshot(fresh=True),
             "asr": asr_model.status(),
         },
     }

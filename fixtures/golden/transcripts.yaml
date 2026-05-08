@@ -1,0 +1,12 @@
+# Self-seeded golden transcripts (placeholder).
+#
+# This file is overwritten by `scripts/seed_golden.py` on first run.
+# Don't hand-edit before seeding.
+#
+# Workflow:
+#   1. Start baseline server.py at http://127.0.0.1:8765
+#   2. From worktree root: `python scripts/seed_golden.py`
+#   3. This file gets a header + per-fixture {text, lang, duration_s, ...}
+#
+# Pattern reference:
+#   wiki/patterns/engine-regression-test-self-seeded-reference.md

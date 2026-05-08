@@ -4,9 +4,12 @@ Rapid-MLX provides no in-process model unload. Best-effort eviction:
     POST /v1/cache/clear → releases prompt/prefix KV cache (~1.4 GB max).
 
 Use detection (no app-side cooperation required):
-    GET /v1/status → cache.evictions counter + cache.current_memory_mb.
-    Any change between polls is treated as a "use" signal — Qwen mutates
-    cache state only when handling a request.
+    GET /v1/status → root.total_requests_processed (monotonic counter,
+    +1 per request) is the primary signal.
+    Secondary fallback: cache.evictions / cache.current_memory_mb change
+    (only fire when prefix cache is mutated, which is sparse — once cache
+    fills and steady-states, evictions/cache_mb plateau even under load).
+    Any of the three changing between polls is treated as a "use" signal.
 
 Behavior:
     - Poll every poll_interval seconds.
@@ -41,6 +44,7 @@ class RemoteQwenCacheManager:
         self._poll_interval: float = float(poll_interval)
         self._last_evictions: Optional[int] = None
         self._last_cache_mb: Optional[float] = None
+        self._last_total_requests: Optional[int] = None
         self._reachable: bool = True
         self._cache_clears_done: int = 0
         self._uses_observed: int = 0
@@ -91,12 +95,19 @@ class RemoteQwenCacheManager:
             self._idle_window.reset()
             self._last_evictions = None
             self._last_cache_mb = None
+            self._last_total_requests = None
             log.info(f"qwen force cache_clear OK ({self._cache_clears_done} total)")
         return ok
 
-    def _detect_use(self, evictions: int, cache_mb: float) -> bool:
-        if self._last_evictions is None or self._last_cache_mb is None:
+    def _detect_use(self, evictions: int, cache_mb: float, total_requests: int) -> bool:
+        if (
+            self._last_evictions is None
+            or self._last_cache_mb is None
+            or self._last_total_requests is None
+        ):
             return False
+        if total_requests != self._last_total_requests:
+            return True
         if evictions != self._last_evictions:
             return True
         return abs(cache_mb - self._last_cache_mb) > 1.0
@@ -127,12 +138,14 @@ class RemoteQwenCacheManager:
                 cache = status.get("cache", {}) or {}
                 evictions = int(cache.get("evictions", 0) or 0)
                 cache_mb = float(cache.get("current_memory_mb", 0.0) or 0.0)
+                total_requests = int(status.get("total_requests_processed", 0) or 0)
 
-                if self._detect_use(evictions, cache_mb):
+                if self._detect_use(evictions, cache_mb, total_requests):
                     self._idle_window.on_use()
                     self._uses_observed += 1
                     log.debug(
-                        f"qwen use detected: evictions {self._last_evictions}→{evictions}, "
+                        f"qwen use detected: total_requests {self._last_total_requests}→{total_requests}, "
+                        f"evictions {self._last_evictions}→{evictions}, "
                         f"cache_mb {self._last_cache_mb:.0f}→{cache_mb:.0f}, "
                         f"level={self._idle_window.level} "
                         f"window={self._idle_window.current_window_seconds:.0f}s"
@@ -140,6 +153,7 @@ class RemoteQwenCacheManager:
 
                 self._last_evictions = evictions
                 self._last_cache_mb = cache_mb
+                self._last_total_requests = total_requests
 
                 if self._idle_window.should_evict():
                     log.info(
@@ -155,6 +169,7 @@ class RemoteQwenCacheManager:
                             new_cache = refreshed.get("cache", {}) or {}
                             self._last_evictions = int(new_cache.get("evictions", 0) or 0)
                             self._last_cache_mb = float(new_cache.get("current_memory_mb", 0.0) or 0.0)
+                            self._last_total_requests = int(refreshed.get("total_requests_processed", 0) or 0)
         except asyncio.CancelledError:
             log.info("qwen poll_loop cancelled")
             raise
@@ -172,6 +187,7 @@ class RemoteQwenCacheManager:
             "last_observed": {
                 "evictions": self._last_evictions,
                 "cache_mb": self._last_cache_mb,
+                "total_requests": self._last_total_requests,
             },
             "idle_window": self._idle_window.status(),
         }

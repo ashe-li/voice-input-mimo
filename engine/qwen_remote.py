@@ -100,11 +100,7 @@ class RemoteQwenCacheManager:
         return ok
 
     def _detect_use(self, evictions: int, cache_mb: float, total_requests: int) -> bool:
-        if (
-            self._last_evictions is None
-            or self._last_cache_mb is None
-            or self._last_total_requests is None
-        ):
+        if any(v is None for v in (self._last_evictions, self._last_cache_mb, self._last_total_requests)):
             return False
         if total_requests != self._last_total_requests:
             return True

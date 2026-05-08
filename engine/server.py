@@ -31,18 +31,18 @@ from pathlib import Path
 from typing import Dict, List, Optional
 
 import soundfile as sf
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse
 
+from engine.adaptive_idle import AdaptiveIdleWindow
 from engine.lifecycle import LazyModel
+from engine.logsetup import emit_request_jsonl, setup_logging
 from engine.memory import MemoryTracker
+from engine.qwen_remote import RemoteQwenCacheManager
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    stream=sys.stderr,
-)
+LOG_DIR = setup_logging()
 log = logging.getLogger("engine.server")
+log.info(f"engine logs at {LOG_DIR}/engine.log + transcribe.jsonl")
 
 PRECISION = os.environ.get("MIMO_PRECISION", "int4")
 MODEL_ROOT = Path(os.environ.get("MIMO_MODEL_ROOT", str(Path.home() / ".cache/mimo-asr")))
@@ -53,8 +53,21 @@ ZHTW_RULESET_PATH = Path(os.environ.get(
     "/Users/shiun/Documents/voice-input-mimo/server/zhtw_ruleset.json",
 ))
 
-ASR_IDLE_SECONDS = float(os.environ.get("ENGINE_ASR_IDLE_SECONDS", "15"))
 METAL_CACHE_LIMIT_MB = int(os.environ.get("ENGINE_METAL_CACHE_LIMIT_MB", "1024"))
+
+
+def _parse_ladder(raw: str) -> tuple:
+    parts = [float(s.strip()) for s in raw.split(",") if s.strip()]
+    return tuple(parts)
+
+
+IDLE_LADDER = _parse_ladder(os.environ.get("ENGINE_IDLE_LADDER_SECONDS", "180,420,900"))
+IDLE_HARD_CEILING = float(os.environ.get("ENGINE_IDLE_HARD_CEILING_SECONDS", "1800"))
+IDLE_CHECK_INTERVAL = float(os.environ.get("ENGINE_IDLE_CHECK_INTERVAL_SECONDS", "5"))
+
+QWEN_ENABLE = os.environ.get("ENGINE_QWEN_ENABLE", "1") == "1"
+QWEN_BASE_URL = os.environ.get("ENGINE_QWEN_BASE_URL", "http://127.0.0.1:8082")
+QWEN_POLL_INTERVAL = float(os.environ.get("ENGINE_QWEN_POLL_INTERVAL_SECONDS", "5"))
 
 
 def _load_mimo_asr():
@@ -141,29 +154,60 @@ def _post_process(text: str, locale: str) -> str:
 
 
 tracker = MemoryTracker()
+
+asr_idle_window = AdaptiveIdleWindow(
+    ladder_seconds=IDLE_LADDER,
+    hard_ceiling_seconds=IDLE_HARD_CEILING,
+)
 asr_model = LazyModel(
     name="asr",
     loader=_load_mimo_asr,
-    idle_seconds=ASR_IDLE_SECONDS,
+    idle_window=asr_idle_window,
     on_evict=tracker.trim_metal_cache,
+)
+
+qwen_idle_window = AdaptiveIdleWindow(
+    ladder_seconds=IDLE_LADDER,
+    hard_ceiling_seconds=IDLE_HARD_CEILING,
+)
+qwen_manager: Optional[RemoteQwenCacheManager] = (
+    RemoteQwenCacheManager(
+        base_url=QWEN_BASE_URL,
+        idle_window=qwen_idle_window,
+        poll_interval=QWEN_POLL_INTERVAL,
+    )
+    if QWEN_ENABLE
+    else None
 )
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     tracker.set_metal_cache_limit_mb(METAL_CACHE_LIMIT_MB)
-    idle_task = asyncio.create_task(asr_model.idle_check_loop())
-    log.info("engine started — idle eviction running")
+    idle_task = asyncio.create_task(
+        asr_model.idle_check_loop(check_interval=IDLE_CHECK_INTERVAL)
+    )
+    qwen_task = None
+    if qwen_manager is not None:
+        qwen_task = asyncio.create_task(qwen_manager.poll_loop())
+    log.info(
+        f"engine started — adaptive idle ladder={list(IDLE_LADDER)} "
+        f"hard_ceiling={IDLE_HARD_CEILING:.0f}s "
+        f"qwen_manager={'on' if qwen_manager else 'off'}"
+    )
     if os.environ.get("ENGINE_PRELOAD", "0") == "1":
         await asr_model.warmup()
     try:
         yield
     finally:
-        idle_task.cancel()
-        try:
-            await idle_task
-        except (asyncio.CancelledError, Exception):
-            pass
+        for task in (idle_task, qwen_task):
+            if task is None:
+                continue
+            task.cancel()
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):
+                pass
         await asr_model.evict()
         log.info("engine stopped")
 
@@ -194,31 +238,53 @@ def list_models():
 
 @app.post("/v1/audio/transcriptions")
 async def transcribe(
+    request: Request,
     file: UploadFile = File(...),
     language: Optional[str] = Form(None),
     model: Optional[str] = Form(None),
     response_format: Optional[str] = Form("json"),
     output_locale: Optional[str] = Form(None),
 ):
+    request_id = (
+        request.headers.get("X-Request-Id")
+        or request.headers.get("x-request-id")
+        or ""
+    ).strip() or f"engine-{int(time.time()*1000)}"
+    received_at = time.time()
     raw = await file.read()
     suffix = Path(file.filename or "audio.wav").suffix or ".wav"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(raw)
         tmp_path = Path(tmp.name)
 
+    audio_duration_s: Optional[float] = None
+    audio_sr: Optional[int] = None
+    audio_ch: Optional[int] = None
+    audio_fmt: Optional[str] = None
+    cold_load = not asr_model.is_loaded
+    raw_text = ""
+    text = ""
+    err: Optional[str] = None
+    asr_elapsed = 0.0
+    cc_elapsed = 0.0
+
     try:
         try:
             info = sf.info(str(tmp_path))
+            audio_duration_s = info.duration
+            audio_sr = info.samplerate
+            audio_ch = info.channels
+            audio_fmt = info.format
             log.info(
-                "Transcribe: %s (%.1fs, %d Hz, %d ch, %s)",
-                file.filename, info.duration, info.samplerate, info.channels, info.format,
+                "[req=%s] Transcribe: %s (%.1fs, %d Hz, %d ch, %s)",
+                request_id, file.filename, info.duration, info.samplerate, info.channels, info.format,
             )
         except Exception as e:
-            log.warning(f"sf.info failed ({e})")
+            log.warning(f"[req={request_id}] sf.info failed ({e})")
 
         lang = (language or DEFAULT_LANGUAGE).lower()
         if lang not in ("auto", "zh", "en"):
-            log.warning(f"Unknown language {lang!r} → auto")
+            log.warning(f"[req={request_id}] Unknown language {lang!r} → auto")
             lang = "auto"
 
         asr = await asr_model.get()
@@ -234,8 +300,8 @@ async def transcribe(
         cc_elapsed = time.perf_counter() - t1
 
         log.info(
-            "Transcribed in %.2fs (+ OpenCC %.0fms, locale=%s): %r → %r",
-            asr_elapsed, cc_elapsed * 1000, locale, raw_text, text,
+            "[req=%s] Transcribed in %.2fs (+ OpenCC %.0fms, locale=%s, cold=%s): %r → %r",
+            request_id, asr_elapsed, cc_elapsed * 1000, locale, cold_load, raw_text, text,
         )
 
         if response_format == "text":
@@ -246,9 +312,11 @@ async def transcribe(
             "language": lang,
             "output_locale": locale,
             "duration_ms": int((asr_elapsed + cc_elapsed) * 1000),
+            "request_id": request_id,
         }
     except Exception as e:
-        log.exception("Transcription failed")
+        err = f"{type(e).__name__}: {e}"
+        log.exception(f"[req={request_id}] Transcription failed")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
         tracker.trim_metal_cache()
@@ -256,6 +324,30 @@ async def transcribe(
             tmp_path.unlink()
         except OSError:
             pass
+        idle_status = asr_model.idle_window.status() if asr_model.idle_window is not None else None
+        emit_request_jsonl({
+            "request_id": request_id,
+            "event": "transcribe",
+            "received_at": received_at,
+            "filename": file.filename,
+            "audio_bytes": len(raw),
+            "audio_duration_s": audio_duration_s,
+            "audio_sr": audio_sr,
+            "audio_ch": audio_ch,
+            "audio_fmt": audio_fmt,
+            "language": (language or DEFAULT_LANGUAGE).lower(),
+            "output_locale": output_locale or "zh-TW",
+            "cold_load": cold_load,
+            "asr_elapsed_ms": int(asr_elapsed * 1000),
+            "post_elapsed_ms": int(cc_elapsed * 1000),
+            "raw_text": raw_text,
+            "text": text,
+            "error": err,
+            "asr_idle_level": idle_status["level"] if idle_status else None,
+            "asr_idle_window_s": idle_status["current_window_seconds"] if idle_status else None,
+            "phys_mb": tracker.snapshot().get("phys_mb"),
+            "rss_mb": tracker.snapshot().get("rss_mb"),
+        })
 
 
 @app.get("/admin/memory")
@@ -263,6 +355,7 @@ def admin_memory():
     return {
         "memory": tracker.snapshot(),
         "asr": asr_model.status(),
+        "qwen": qwen_manager.status() if qwen_manager is not None else {"enabled": False},
     }
 
 
@@ -276,6 +369,21 @@ async def admin_evict():
             "asr": asr_model.status(),
         },
     }
+
+
+@app.get("/admin/qwen/status")
+def admin_qwen_status():
+    if qwen_manager is None:
+        return {"enabled": False}
+    return qwen_manager.status()
+
+
+@app.post("/admin/qwen/cache_clear")
+async def admin_qwen_cache_clear():
+    if qwen_manager is None:
+        raise HTTPException(status_code=503, detail="qwen_manager disabled")
+    ok = await qwen_manager.force_cache_clear()
+    return {"ok": ok, "after": qwen_manager.status()}
 
 
 if __name__ == "__main__":

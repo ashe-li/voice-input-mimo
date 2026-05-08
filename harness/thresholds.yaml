@@ -1,0 +1,23 @@
+# Per-metric regression / improvement gate.
+# regression_pct: 對 baseline 退步多少 % 視為 regression（exit code 1）
+# improvement_pct: 對 baseline 進步多少 % 才算「真改善」（避免 noise 漂移）
+#
+# 慣例：
+#   - 數值類 metric (latency / RAM)     → 5–10% threshold
+#   - 品質類 metric (WER / CER)         → 0% 容忍，任何下降都算 regression
+#   - improvement 設高一點，避免 baseline 一直被微調
+
+# Memory（這版的核心 KPI）
+peak_rss_mb:           { regression_pct: 0,  improvement_pct: 5 }
+steady_idle_rss_mb:    { regression_pct: 0,  improvement_pct: 10 }
+mlx_metal_cache_mb:    { regression_pct: 5,  improvement_pct: 10 }
+evict_reload_ms:       { regression_pct: 15, improvement_pct: 20 }
+
+# Latency
+cold_ttft_ms:          { regression_pct: 10, improvement_pct: 15 }
+batch_total_ms:        { regression_pct: 5,  improvement_pct: 10 }
+pipeline_e2e_ms:       { regression_pct: 5,  improvement_pct: 10 }
+
+# Quality（零容忍）
+wer:                   { regression_pct: 0,  improvement_pct: 5 }
+cer:                   { regression_pct: 0,  improvement_pct: 5 }

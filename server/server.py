@@ -21,9 +21,16 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Dict, Optional
 
+import mlx.core as mx
 import soundfile as sf
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import JSONResponse
+
+# Long-running ASR server: cap MLX Metal cache + flush after each request.
+# MLX defaults to unbounded cache (designed for batch workloads); without these
+# guards RSS climbs unbounded under sparse user-driven load (1500 ms cold start
+# turns into 8 GB → 12 GB+ over a day of voice-input use).
+mx.metal.set_cache_limit(1 << 30)  # 1 GB working-set ceiling
 
 logging.basicConfig(
     level=logging.INFO,
@@ -239,6 +246,9 @@ async def transcribe(
         log.exception("Transcription failed")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
+        # Reset MLX Metal pool back to baseline so RSS doesn't accumulate
+        # ephemeral inference buffers between requests.
+        mx.metal.clear_cache()
         try:
             tmp_path.unlink()
         except OSError:

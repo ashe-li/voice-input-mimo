@@ -33,3 +33,8 @@ nohup.out
 .env
 .env.local
 *.secret
+
+# === Worktree-specific (asr-engine) ===
+harness/runs/*
+!harness/runs/.gitkeep
+fixtures/audio/

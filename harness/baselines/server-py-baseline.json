@@ -1,0 +1,48 @@
+{
+  "schema_version": 1,
+  "engine": "server.py",
+  "promoted_from": {
+    "memory": "server-py-memory-20260508-213633.json",
+    "latency": "server-py-latency-20260508-213749.json",
+    "wer": "server-py-wer-20260508-213806.json"
+  },
+  "promoted_at": "2026-05-08T13:39:21.682133+00:00",
+  "baseline_version": {
+    "git_sha": "82f4b456bc2e351327a9dfe27cfa0d6a139da8ef",
+    "git_branch": "feat/asr-engine-memory-mgmt",
+    "git_status_clean": false,
+    "git_status_raw": "M fixtures/golden/transcripts.yaml\n M scripts/bench_memory.py\n?? .claude/",
+    "captured_at": "2026-05-08T13:37:19.560861+00:00"
+  },
+  "host": {
+    "platform": "macOS-26.3-arm64-arm-64bit",
+    "machine": "arm64",
+    "python": "3.12.13"
+  },
+  "summary": {
+    "memory": {
+      "cold_phys_mb": 5836.8,
+      "cold_rss_mb": 127.109375,
+      "peak_phys_mb": 6451.2,
+      "peak_rss_mb": 127.265625,
+      "post_idle_phys_mb": 5836.8,
+      "post_idle_rss_mb": 127.265625,
+      "idle_drop_phys_mb": 614.3999999999996,
+      "idle_drop_rss_mb": 0.0
+    },
+    "latency": {
+      "cold_ms": 700.3632090054452,
+      "warm_ms": 695.1515830587596,
+      "steady_median_ms": 718.2743125013076,
+      "steady_p95_ms": 777.3211187100969,
+      "n_success": 10,
+      "n_total": 10
+    },
+    "wer": {
+      "avg_wer": 0.0,
+      "avg_cer": 0.0,
+      "n_scored": 10,
+      "n_total": 10
+    }
+  }
+}

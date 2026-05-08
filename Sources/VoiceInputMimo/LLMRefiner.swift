@@ -3,21 +3,6 @@ import os.log
 
 private let logger = Logger(subsystem: "com.yetone.VoiceInput", category: "LLMRefiner")
 
-private func logToFile(_ message: String) {
-    let msg = "[\(ISO8601DateFormatter().string(from: Date()))] \(message)\n"
-    let dir = FileManager.default.homeDirectoryForCurrentUser
-        .appendingPathComponent("Library/Logs/VoiceInputMimo", isDirectory: true)
-    try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-    let logURL = dir.appendingPathComponent("llm.log")
-    if let handle = try? FileHandle(forWritingTo: logURL) {
-        handle.seekToEndOfFile()
-        handle.write(msg.data(using: .utf8)!)
-        handle.closeFile()
-    } else {
-        FileManager.default.createFile(atPath: logURL.path, contents: msg.data(using: .utf8))
-    }
-}
-
 enum RefineMode: String {
     case refine        // Original: cleanup-only, keep language
     case claudeCode    // Cleanup + Chinese→English + append zh-TW suffix
@@ -142,8 +127,7 @@ final class LLMRefiner {
         let resolvedMode = mode ?? (claudeCodeModeEnabled ? .claudeCode : .refine)
         let systemPrompt = (resolvedMode == .claudeCode) ? claudeCodeSystemPrompt : refineSystemPrompt
 
-        let baseURL = apiBaseURL.hasSuffix("/") ? String(apiBaseURL.dropLast()) : apiBaseURL
-        guard let url = URL(string: "\(baseURL)/chat/completions") else {
+        guard let url = URL(string: "\(normalizedBaseURL())/chat/completions") else {
             completion(.failure(RefinerError.invalidURL))
             return
         }
@@ -170,30 +154,30 @@ final class LLMRefiner {
         ]
 
         let logTag = requestId.isEmpty ? "" : "[req=\(requestId)] "
-        logToFile("\(logTag)Request: \(url.absoluteString) model=\(model) mode=\(resolvedMode.rawValue)")
+        logger.debug("\(logTag)Request: \(url.absoluteString) model=\(self.model) mode=\(resolvedMode.rawValue)")
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
         let suffixToAppend = (resolvedMode == .claudeCode) ? claudeCodeSuffix : ""
 
         currentTask = URLSession.shared.dataTask(with: request) { data, _, error in
             if let error {
-                logToFile("\(logTag)Network error: \(error.localizedDescription)")
+                logger.error("\(logTag)Network error: \(error.localizedDescription)")
                 DispatchQueue.main.async { completion(.failure(error)) }
                 return
             }
             guard let data else {
-                logToFile("\(logTag)No data in response")
+                logger.error("\(logTag)No data in response")
                 DispatchQueue.main.async { completion(.failure(RefinerError.invalidResponse)) }
                 return
             }
             if let raw = String(data: data, encoding: .utf8) {
-                logToFile("\(logTag)Response: \(raw)")
+                logger.debug("\(logTag)Response: \(raw)")
             }
             guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let choices = json["choices"] as? [[String: Any]],
                   let message = choices.first?["message"] as? [String: Any]
             else {
-                logToFile("\(logTag)Failed to parse response")
+                logger.error("\(logTag)Failed to parse response")
                 DispatchQueue.main.async { completion(.failure(RefinerError.invalidResponse)) }
                 return
             }
@@ -204,11 +188,11 @@ final class LLMRefiner {
             if content.isEmpty {
                 let usage = json["usage"] as? [String: Any]
                 let finishReason = (choices.first?["finish_reason"] as? String) ?? "?"
-                logToFile("\(logTag)WARN: empty content. finish=\(finishReason) usage=\(usage ?? [:])")
+                logger.warning("\(logTag)empty content. finish=\(finishReason) usage=\(String(describing: usage ?? [:]))")
             }
             let refined = content.trimmingCharacters(in: .whitespacesAndNewlines)
             let finalText = suffixToAppend.isEmpty ? refined : "\(refined)\(suffixToAppend)"
-            logToFile("\(logTag)Refined (\(resolvedMode.rawValue)): '\(text)' -> '\(refined)' (suffix=\(suffixToAppend.count) chars)")
+            logger.debug("\(logTag)Refined (\(resolvedMode.rawValue)): '\(text)' -> '\(refined)' (suffix=\(suffixToAppend.count) chars)")
             DispatchQueue.main.async { completion(.success(finalText)) }
         }
         currentTask?.resume()
@@ -219,10 +203,15 @@ final class LLMRefiner {
         currentTask = nil
     }
 
+    // MARK: - Private helpers
+
+    private func normalizedBaseURL() -> String {
+        apiBaseURL.hasSuffix("/") ? String(apiBaseURL.dropLast()) : apiBaseURL
+    }
+
     /// Probe an OpenAI-compatible /v1/models endpoint. Used by Settings to detect LM Studio.
     func probeModels(completion: @escaping (Result<[String], Error>) -> Void) {
-        let baseURL = apiBaseURL.hasSuffix("/") ? String(apiBaseURL.dropLast()) : apiBaseURL
-        guard let url = URL(string: "\(baseURL)/models") else {
+        guard let url = URL(string: "\(normalizedBaseURL())/models") else {
             completion(.failure(RefinerError.invalidURL))
             return
         }

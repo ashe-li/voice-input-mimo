@@ -14,11 +14,17 @@ import logging
 import os
 import platform
 import subprocess
+import time
 from typing import Optional
 
 import psutil
 
 log = logging.getLogger("engine.memory")
+
+# Per-request transcribe finally block called snapshot() which spawned vmmap
+# subprocess (~1-2s on macOS for big processes). For 0.5s ASR + 2s vmmap = 4×
+# user-perceived latency. Cache snapshot with TTL so hot path returns instantly.
+DEFAULT_SNAPSHOT_TTL_S = 5.0
 
 
 def _parse_size_to_mb(s: str) -> float:
@@ -35,9 +41,16 @@ def _parse_size_to_mb(s: str) -> float:
 class MemoryTracker:
     """Process memory + MLX cache observability."""
 
-    def __init__(self, pid: Optional[int] = None) -> None:
+    def __init__(
+        self,
+        pid: Optional[int] = None,
+        snapshot_ttl_s: float = DEFAULT_SNAPSHOT_TTL_S,
+    ) -> None:
         self._pid = pid or os.getpid()
         self._process = psutil.Process(self._pid)
+        self._snapshot_ttl_s = snapshot_ttl_s
+        self._cached_snapshot: Optional[dict] = None
+        self._cached_at_monotonic: float = 0.0
 
     @property
     def pid(self) -> int:
@@ -108,11 +121,27 @@ class MemoryTracker:
         except Exception as e:
             log.warning(f"set_metal_cache_limit failed: {e}")
 
-    def snapshot(self) -> dict:
-        return {
+    def snapshot(self, *, fresh: bool = False) -> dict:
+        """Return process memory snapshot (cached up to `snapshot_ttl_s`).
+
+        Per-request hot path（transcribe finally block）should NOT pay vmmap
+        subprocess cost. /admin/memory and similar diagnostics pass `fresh=True`
+        for live values.
+        """
+        now = time.monotonic()
+        if (
+            not fresh
+            and self._cached_snapshot is not None
+            and (now - self._cached_at_monotonic) < self._snapshot_ttl_s
+        ):
+            return self._cached_snapshot
+        snap = {
             "pid": self._pid,
             "rss_mb": self.rss_mb(),
             "phys_mb": self.phys_mb(),
             "metal_active_mb": self.metal_active_mb(),
             "metal_cache_mb": self.metal_cache_mb(),
         }
+        self._cached_snapshot = snap
+        self._cached_at_monotonic = now
+        return snap

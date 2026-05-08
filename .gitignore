@@ -5,6 +5,10 @@ DerivedData/
 *.xcodeproj/
 *.xcworkspace/
 *.dSYM.zip
+VoiceInputMimo.app/
+
+# Claude Code project state
+.claude/
 
 # macOS
 .DS_Store

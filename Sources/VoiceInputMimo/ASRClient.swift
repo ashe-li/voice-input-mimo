@@ -129,8 +129,18 @@ final class ASRClient {
 
     /// GET /v1/health → JSON dict (or error).
     func health(completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        getJSON(path: "/v1/health", completion: completion)
+    }
+
+    /// GET /admin/memory → JSON dict（含 asr.idle.level / current_window / time_since_use_s）.
+    /// Uses cached snapshot — Phase 2 engine returns instantly without vmmap subprocess tax.
+    func adminMemory(completion: @escaping (Result<[String: Any], Error>) -> Void) {
+        getJSON(path: "/admin/memory", completion: completion)
+    }
+
+    private func getJSON(path: String, completion: @escaping (Result<[String: Any], Error>) -> Void) {
         let trimmed = baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL
-        guard let url = URL(string: "\(trimmed)/v1/health") else {
+        guard let url = URL(string: "\(trimmed)\(path)") else {
             completion(.failure(ASRError.invalidURL)); return
         }
         var req = URLRequest(url: url)
@@ -146,6 +156,67 @@ final class ASRClient {
             }
             DispatchQueue.main.async { completion(.success(json)) }
         }.resume()
+    }
+
+    /// Smoke transcribe — POST a synthetic 1-second silence WAV, measure end-to-end
+    /// latency. Triggers cold load if model evicted; useful as a real "is the pipeline
+    /// actually fast" probe rather than just /v1/health which may be misleadingly fast.
+    func smokeTranscribe(completion: @escaping (Result<(elapsedMs: Int, text: String, wasCold: Bool, jsonText: String), Error>) -> Void) {
+        let wavData = Self.generateSilenceWav()
+        let tempDir = FileManager.default.temporaryDirectory
+        let tempURL = tempDir.appendingPathComponent("asr-smoke-\(UUID().uuidString).wav")
+        do {
+            try wavData.write(to: tempURL)
+        } catch {
+            completion(.failure(error)); return
+        }
+        let startedAt = Date()
+        // Need to know cold/warm BEFORE transcribe — read /admin/memory first.
+        adminMemory { [weak self] memResult in
+            let preLoaded: Bool = {
+                if case .success(let mem) = memResult {
+                    return ((mem["asr"] as? [String: Any])?["loaded"] as? Bool) ?? false
+                }
+                return false
+            }()
+            self?.transcribe(wavURL: tempURL) { result in
+                let elapsed = Int(Date().timeIntervalSince(startedAt) * 1000)
+                try? FileManager.default.removeItem(at: tempURL)
+                switch result {
+                case .success(let r):
+                    completion(.success((elapsedMs: elapsed, text: r.text, wasCold: !preLoaded, jsonText: r.text)))
+                case .failure(let e):
+                    completion(.failure(e))
+                }
+            }
+        }
+    }
+
+    /// Build minimal 16 kHz mono PCM 16-bit WAV of `durationSec` of silence (zeros).
+    /// Used by smokeTranscribe — engine is fine with silence input (returns empty text
+    /// or filler), latency measurement is the goal.
+    private static func generateSilenceWav(durationSec: Double = 1.0, sampleRate: Int = 16000) -> Data {
+        let numSamples = Int(durationSec * Double(sampleRate))
+        let dataSize = numSamples * 2   // 16-bit mono = 2 bytes/sample
+        let totalSize = 36 + dataSize   // header (44 - 8) + audio data
+        var data = Data()
+        func u32le(_ v: UInt32) { var x = v.littleEndian; data.append(Data(bytes: &x, count: 4)) }
+        func u16le(_ v: UInt16) { var x = v.littleEndian; data.append(Data(bytes: &x, count: 2)) }
+        data.append("RIFF".data(using: .ascii)!)
+        u32le(UInt32(totalSize))
+        data.append("WAVE".data(using: .ascii)!)
+        data.append("fmt ".data(using: .ascii)!)
+        u32le(16)                         // fmt chunk size
+        u16le(1)                          // PCM
+        u16le(1)                          // mono
+        u32le(UInt32(sampleRate))
+        u32le(UInt32(sampleRate * 2))     // byte rate (sampleRate × bytesPerSample × channels)
+        u16le(2)                          // block align
+        u16le(16)                         // bits per sample
+        data.append("data".data(using: .ascii)!)
+        u32le(UInt32(dataSize))
+        data.append(Data(count: dataSize))   // silence (zeros)
+        return data
     }
 
     enum ASRError: LocalizedError {

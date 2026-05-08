@@ -38,3 +38,6 @@ nohup.out
 harness/runs/*
 !harness/runs/.gitkeep
 fixtures/audio/
+
+# Built app bundle
+VoiceInputMimo.app/

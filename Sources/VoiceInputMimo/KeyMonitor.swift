@@ -19,7 +19,9 @@ final class KeyMonitor {
             options: .defaultTap,
             eventsOfInterest: mask,
             callback: { _, type, event, refcon -> Unmanaged<CGEvent>? in
-                guard let refcon else { return Unmanaged.passRetained(event) }
+                // passUnretained: tap callback gets event with implicit ref;
+                // pass-through must NOT add a second retain (would leak per event).
+                guard let refcon else { return Unmanaged.passUnretained(event) }
                 let monitor = Unmanaged<KeyMonitor>.fromOpaque(refcon).takeUnretainedValue()
                 return monitor.handle(type: type, event: event)
             },
@@ -57,7 +59,7 @@ final class KeyMonitor {
             if let tap = eventTap {
                 CGEvent.tapEnable(tap: tap, enable: true)
             }
-            return Unmanaged.passRetained(event)
+            return Unmanaged.passUnretained(event)
         }
 
         let flags = event.flags
@@ -76,6 +78,6 @@ final class KeyMonitor {
             return nil // suppress Fn release
         }
 
-        return Unmanaged.passRetained(event)
+        return Unmanaged.passUnretained(event)
     }
 }

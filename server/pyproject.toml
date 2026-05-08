@@ -10,4 +10,6 @@ dependencies = [
     "python-multipart>=0.0.9",
     "soundfile>=0.12",
     "huggingface_hub>=0.20",
+    "psutil>=5.9",            # MemoryTracker (engine/memory.py + server.py)
+    "opencc-python-reimplemented>=0.1.7",  # zh-Hans → zh-TW post-process
 ]

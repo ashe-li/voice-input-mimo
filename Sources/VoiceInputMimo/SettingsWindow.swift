@@ -7,6 +7,17 @@ final class SettingsWindow: NSPanel {
     private let asrLocalePopup = NSPopUpButton()
     private let asrProbeLabel = NSTextField(labelWithString: "")
 
+    // ASR Server (local supervisor) section
+    private let serverDirField = NSTextField()
+    private let serverPythonField = NSTextField()
+    private let serverPortField = NSTextField()
+    private let serverPrecisionPopup = NSPopUpButton()
+    private let serverModelRootField = NSTextField()
+    private let serverPreloadCheckbox = NSButton(
+        checkboxWithTitle: "Preload model on startup (avoids 1 s+ cold-start tax)",
+        target: nil, action: nil)
+    private let serverStatusLabel = NSTextField(labelWithString: "")
+
     // LLM section
     private let llmEnabledCheckbox = NSButton(checkboxWithTitle: "Enable LLM (uncheck = ASR only, fastest)", target: nil, action: nil)
     private let translateCheckbox = NSButton(checkboxWithTitle: "Translate to English (Claude Code mode)", target: nil, action: nil)
@@ -19,10 +30,14 @@ final class SettingsWindow: NSPanel {
 
     private let statusLabel = NSTextField(labelWithString: "")
 
+    // Auto-poll timer — refreshes ASR + LLM probe labels every 5s while window is key,
+    // so user sees live state without clicking Probe (loaded ↔ idle transitions, etc.).
+    private var probeTimer: Timer?
+
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 620, height: 600),
-            styleMask: [.titled, .closable, .fullSizeContentView],
+            contentRect: NSRect(x: 0, y: 0, width: 640, height: 880),
+            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -176,6 +191,60 @@ final class SettingsWindow: NSPanel {
         asrButtonRow.spacing = 8
         asrButtonRow.translatesAutoresizingMaskIntoConstraints = false
 
+        // Server (local ASR supervisor) section
+        let serverHeader = sectionLabel("ASR Server (local process)", icon: "server.rack")
+
+        serverDirField.placeholderString = "~/Documents/voice-input-mimo/server"
+        serverPythonField.placeholderString = "<server>/.venv/bin/python"
+        serverPortField.placeholderString = "8765"
+        serverPrecisionPopup.addItems(withTitles: ["int4", "bf16"])
+        serverModelRootField.placeholderString = "~/.cache/mimo-asr"
+
+        let dirBrowse = NSButton(title: "Browse…", target: self, action: #selector(browseServerDir))
+        dirBrowse.bezelStyle = .rounded
+        let pythonBrowse = NSButton(title: "Browse…", target: self, action: #selector(browsePython))
+        pythonBrowse.bezelStyle = .rounded
+        let modelRootBrowse = NSButton(title: "Browse…", target: self, action: #selector(browseModelRoot))
+        modelRootBrowse.bezelStyle = .rounded
+
+        let dirRow = NSStackView(views: [serverDirField, dirBrowse])
+        dirRow.orientation = .horizontal; dirRow.spacing = 6
+        let pythonRow = NSStackView(views: [serverPythonField, pythonBrowse])
+        pythonRow.orientation = .horizontal; pythonRow.spacing = 6
+        let modelRootRow = NSStackView(views: [serverModelRootField, modelRootBrowse])
+        modelRootRow.orientation = .horizontal; modelRootRow.spacing = 6
+
+        serverPreloadCheckbox.translatesAutoresizingMaskIntoConstraints = false
+
+        let serverGrid = NSGridView(views: [
+            [rightLabel("Server dir:"), dirRow],
+            [rightLabel("Python:"), pythonRow],
+            [rightLabel("Port:"), serverPortField],
+            [rightLabel("Precision:"), serverPrecisionPopup],
+            [rightLabel("Model root:"), modelRootRow],
+            [rightLabel("Mode:"), serverPreloadCheckbox],
+        ])
+        serverGrid.column(at: 0).xPlacement = .trailing
+        serverGrid.rowSpacing = 10
+        serverGrid.columnSpacing = 8
+        serverGrid.translatesAutoresizingMaskIntoConstraints = false
+
+        let applyRestartButton = NSButton(
+            title: "Apply & Restart Server",
+            target: self,
+            action: #selector(applyAndRestartServer))
+        applyRestartButton.bezelStyle = .rounded
+        if #available(macOS 14, *) { applyRestartButton.bezelColor = .controlAccentColor }
+
+        serverStatusLabel.translatesAutoresizingMaskIntoConstraints = false
+        serverStatusLabel.font = .systemFont(ofSize: 11)
+        serverStatusLabel.textColor = .secondaryLabelColor
+
+        let serverButtonRow = NSStackView(views: [serverStatusLabel, applyRestartButton])
+        serverButtonRow.orientation = .horizontal
+        serverButtonRow.spacing = 8
+        serverButtonRow.translatesAutoresizingMaskIntoConstraints = false
+
         let llmButtonRow = NSStackView(views: [llmProbeLabel, llmProbeButton, resetSuffixButton])
         llmButtonRow.orientation = .horizontal
         llmButtonRow.spacing = 8
@@ -186,17 +255,19 @@ final class SettingsWindow: NSPanel {
         bottomRow.spacing = 8
         bottomRow.translatesAutoresizingMaskIntoConstraints = false
 
-        let separator = NSBox()
-        separator.boxType = .separator
-        separator.translatesAutoresizingMaskIntoConstraints = false
+        let sep1 = NSBox(); sep1.boxType = .separator; sep1.translatesAutoresizingMaskIntoConstraints = false
+        let sep2 = NSBox(); sep2.boxType = .separator; sep2.translatesAutoresizingMaskIntoConstraints = false
 
-        for sub in [asrHeader, asrGrid, asrButtonRow, separator, llmHeader, llmGrid, llmButtonRow, bottomRow] {
+        for sub in [asrHeader, asrGrid, asrButtonRow,
+                    sep1, serverHeader, serverGrid, serverButtonRow,
+                    sep2, llmHeader, llmGrid, llmButtonRow, bottomRow] {
             sub.translatesAutoresizingMaskIntoConstraints = false
             cv.addSubview(sub)
         }
 
         NSLayoutConstraint.activate([
-            asrHeader.topAnchor.constraint(equalTo: cv.topAnchor, constant: 18),
+            // 46 = 28 (titlebar height under .fullSizeContentView) + 18 (visual padding).
+            asrHeader.topAnchor.constraint(equalTo: cv.topAnchor, constant: 46),
             asrHeader.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
 
             asrGrid.topAnchor.constraint(equalTo: asrHeader.bottomAnchor, constant: 10),
@@ -209,12 +280,32 @@ final class SettingsWindow: NSPanel {
             asrButtonRow.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
             asrButtonRow.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
 
-            separator.topAnchor.constraint(equalTo: asrButtonRow.bottomAnchor, constant: 18),
-            separator.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
-            separator.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
-            separator.heightAnchor.constraint(equalToConstant: 1),
+            sep1.topAnchor.constraint(equalTo: asrButtonRow.bottomAnchor, constant: 18),
+            sep1.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            sep1.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
+            sep1.heightAnchor.constraint(equalToConstant: 1),
 
-            llmHeader.topAnchor.constraint(equalTo: separator.bottomAnchor, constant: 14),
+            serverHeader.topAnchor.constraint(equalTo: sep1.bottomAnchor, constant: 14),
+            serverHeader.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+
+            serverGrid.topAnchor.constraint(equalTo: serverHeader.bottomAnchor, constant: 10),
+            serverGrid.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            serverGrid.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
+            serverDirField.widthAnchor.constraint(greaterThanOrEqualToConstant: 320),
+            serverPythonField.widthAnchor.constraint(greaterThanOrEqualToConstant: 320),
+            serverModelRootField.widthAnchor.constraint(greaterThanOrEqualToConstant: 320),
+            serverPortField.widthAnchor.constraint(equalToConstant: 90),
+
+            serverButtonRow.topAnchor.constraint(equalTo: serverGrid.bottomAnchor, constant: 10),
+            serverButtonRow.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            serverButtonRow.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
+
+            sep2.topAnchor.constraint(equalTo: serverButtonRow.bottomAnchor, constant: 18),
+            sep2.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            sep2.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
+            sep2.heightAnchor.constraint(equalToConstant: 1),
+
+            llmHeader.topAnchor.constraint(equalTo: sep2.bottomAnchor, constant: 14),
             llmHeader.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
 
             llmGrid.topAnchor.constraint(equalTo: llmHeader.bottomAnchor, constant: 10),
@@ -239,6 +330,42 @@ final class SettingsWindow: NSPanel {
 
         statusLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
         statusLabel.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
+
+        // Auto-poll lifecycle — run quick probe every 5s while window is key, stop when closing.
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleBecomeKey),
+            name: NSWindow.didBecomeKeyNotification, object: self
+        )
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleWillClose),
+            name: NSWindow.willCloseNotification, object: self
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+        probeTimer?.invalidate()
+    }
+
+    @objc private func handleBecomeKey() {
+        startProbeTimer()
+    }
+
+    @objc private func handleWillClose() {
+        stopProbeTimer()
+    }
+
+    private func startProbeTimer() {
+        stopProbeTimer()
+        quickProbeASR()       // immediate refresh on open
+        probeTimer = Timer.scheduledTimer(withTimeInterval: 5.0, repeats: true) { [weak self] _ in
+            self?.quickProbeASR()
+        }
+    }
+
+    private func stopProbeTimer() {
+        probeTimer?.invalidate()
+        probeTimer = nil
     }
 
     private func loadSettings() {
@@ -246,6 +373,15 @@ final class SettingsWindow: NSPanel {
         asrBaseField.stringValue = asr.baseURL
         asrLanguagePopup.selectItem(withTitle: asr.language)
         asrLocalePopup.selectItem(withTitle: asr.outputLocale)
+
+        let server = LocalASRServer.Configuration.current()
+        serverDirField.stringValue = server.serverDir
+        serverPythonField.stringValue = server.pythonPath
+        serverPortField.stringValue = String(server.port)
+        serverPrecisionPopup.selectItem(withTitle: server.precision)
+        serverModelRootField.stringValue = server.modelRoot
+        serverPreloadCheckbox.state = server.preload ? .on : .off
+        showServerStatus(serverStateText(LocalASRServer.shared.state), success: nil)
 
         let llm = LLMRefiner.shared
         llmEnabledCheckbox.state = llm.isEnabled ? .on : .off
@@ -256,25 +392,144 @@ final class SettingsWindow: NSPanel {
         suffixField.string = llm.claudeCodeSuffix
     }
 
-    @objc private func probeASR() {
-        applyFields()
-        showASRProbe("Probing \(ASRClient.shared.baseURL) ...", success: nil)
-        ASRClient.shared.health { [weak self] result in
-            switch result {
-            case .success(let json):
-                let modelLoaded = (json["model_loaded"] as? Bool) ?? false
-                let opencc = (json["opencc_config"] as? String) ?? "?"
-                let zhtw = (json["zhtw_rules_loaded"] as? Int) ?? 0
-                let mark = modelLoaded ? "✅" : "⚠️"
-                let zhtwStr = zhtw > 0 ? ", zhtw=\(zhtw)" : ""
-                self?.showASRProbe(
-                    "\(mark) loaded=\(modelLoaded), opencc=\(opencc)\(zhtwStr)",
-                    success: modelLoaded
-                )
-            case .failure(let error):
-                self?.showASRProbe("❌ \(error.localizedDescription)", success: false)
+    private func serverStateText(_ state: LocalASRServer.State) -> String {
+        switch state {
+        case .running: return "● running"
+        case .starting: return "● starting…"
+        case .stopped: return "○ stopped"
+        case .failed(let m): return "✕ failed — \(m.prefix(60))"
+        }
+    }
+
+    // MARK: - ASR Server actions
+
+    @objc private func browseServerDir() { browseDirectory(into: serverDirField) }
+    @objc private func browseModelRoot() { browseDirectory(into: serverModelRootField) }
+
+    @objc private func browsePython() {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = false
+        panel.title = "Select python executable"
+        panel.beginSheetModal(for: self) { [weak self] resp in
+            guard resp == .OK, let url = panel.url else { return }
+            self?.serverPythonField.stringValue = url.path
+        }
+    }
+
+    private func browseDirectory(into field: NSTextField) {
+        let panel = NSOpenPanel()
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.title = "Select directory"
+        panel.beginSheetModal(for: self) { resp in
+            guard resp == .OK, let url = panel.url else { return }
+            field.stringValue = url.path
+        }
+    }
+
+    @objc private func applyAndRestartServer() {
+        applyServerFields()
+        let config = LocalASRServer.Configuration.current()
+        if let err = config.validate() {
+            showServerStatus("✕ \(err.localizedDescription)", success: false)
+            return
+        }
+        showServerStatus("Restarting…", success: nil)
+        LocalASRServer.shared.restart { [weak self] result in
+            DispatchQueue.main.async {
+                switch result {
+                case .success:
+                    self?.showServerStatus("✅ Running on :\(config.port)", success: true)
+                case .failure(let error):
+                    self?.showServerStatus("❌ \(error.localizedDescription)", success: false)
+                }
             }
         }
+    }
+
+    private func applyServerFields() {
+        var c = LocalASRServer.Configuration.current()
+        c.serverDir = serverDirField.stringValue.trimmingCharacters(in: .whitespaces)
+        c.pythonPath = serverPythonField.stringValue.trimmingCharacters(in: .whitespaces)
+        c.port = Int(serverPortField.stringValue) ?? c.port
+        c.precision = serverPrecisionPopup.titleOfSelectedItem ?? c.precision
+        c.modelRoot = serverModelRootField.stringValue.trimmingCharacters(in: .whitespaces)
+        c.preload = (serverPreloadCheckbox.state == .on)
+        c.write()
+    }
+
+    private func showServerStatus(_ text: String, success: Bool?) { paint(serverStatusLabel, text, success) }
+
+    /// Manual Probe ASR button — runs a smoke transcribe (synthetic 1s silence WAV)
+    /// to measure REAL end-to-end latency including any cold-load tax. /v1/health alone
+    /// only confirms the server is up, not that transcribe is fast.
+    @objc private func probeASR() {
+        applyFields()
+        showASRProbe("Smoke transcribe \(ASRClient.shared.baseURL) ...", success: nil)
+        ASRClient.shared.smokeTranscribe { [weak self] result in
+            switch result {
+            case .success(let r):
+                let coldStr = r.wasCold ? "cold" : "warm"
+                self?.showASRProbe(
+                    "✅ smoke \(coldStr) \(r.elapsedMs) ms",
+                    success: true
+                )
+                // Refresh quick probe right after smoke (state likely changed: loaded=true now).
+                self?.quickProbeASR()
+            case .failure(let error):
+                self?.showASRProbe("❌ smoke failed: \(error.localizedDescription)", success: false)
+            }
+        }
+    }
+
+    /// Lightweight refresh — combines /v1/health + /admin/memory into one status line.
+    /// Distinguishes three states:
+    ///   - loaded=true                                       → ✅ green
+    ///   - loaded=false + reachable + adaptive idle context → ⏸ blue (idle by design, not error)
+    ///   - unreachable                                       → ❌ red
+    private func quickProbeASR() {
+        ASRClient.shared.health { [weak self] healthResult in
+            switch healthResult {
+            case .failure(let error):
+                self?.showASRProbe("❌ \(error.localizedDescription)", success: false)
+            case .success(let health):
+                ASRClient.shared.adminMemory { [weak self] memResult in
+                    self?.renderQuickProbe(health: health, mem: try? memResult.get())
+                }
+            }
+        }
+    }
+
+    private func renderQuickProbe(health: [String: Any], mem: [String: Any]?) {
+        let asrLoaded = (health["asr_loaded"] as? Bool) ?? false
+        let opencc = (health["opencc_config"] as? String) ?? "?"
+        let zhtw = (health["zhtw_rules_loaded"] as? Int) ?? 0
+        let zhtwStr = zhtw > 0 ? ", zhtw=\(zhtw)" : ""
+
+        // /admin/memory provides idle ladder context for unloaded state.
+        var idleSuffix = ""
+        if let mem,
+           let asr = mem["asr"] as? [String: Any],
+           let idle = asr["idle"] as? [String: Any],
+           let level = idle["level"] as? Int,
+           let win = idle["current_window_seconds"] as? Double {
+            let timeSinceUse = (asr["time_since_use_s"] as? Double) ?? 0
+            let evictsIn = max(0, win - timeSinceUse)
+            if asrLoaded {
+                idleSuffix = ", L\(level)/\(Int(win))s, evicts in \(Int(evictsIn))s"
+            } else {
+                idleSuffix = ", L\(level)/\(Int(win))s, idle"
+            }
+        }
+
+        // Color logic: loaded=true → green; loaded=false+reachable → blue (idle ok); unreachable → red.
+        // unreachable case is handled in quickProbeASR's healthResult.failure branch.
+        let mark = asrLoaded ? "✅" : "⏸"
+        let success: Bool? = asrLoaded ? true : nil   // nil = secondaryLabel grey (per paint)
+        showASRProbe("\(mark) loaded=\(asrLoaded), opencc=\(opencc)\(zhtwStr)\(idleSuffix)", success: success)
     }
 
     @objc private func probeLLM() {
@@ -324,6 +579,10 @@ final class SettingsWindow: NSPanel {
         asr.baseURL = asrBaseField.stringValue
         asr.language = asrLanguagePopup.titleOfSelectedItem ?? "auto"
         asr.outputLocale = asrLocalePopup.titleOfSelectedItem ?? "zh-TW"
+
+        // Server section persists via Apply & Restart, but Save also writes
+        // (so closing the window without explicit restart still preserves intent).
+        applyServerFields()
 
         let llm = LLMRefiner.shared
         llm.isEnabled = (llmEnabledCheckbox.state == .on)

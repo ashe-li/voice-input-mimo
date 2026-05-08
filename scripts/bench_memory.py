@@ -1,11 +1,19 @@
-"""Profile RSS across cold-start, request, idle phases.
+"""Profile process memory across cold-start, request, idle phases.
 
 Phase 0 baseline measurement for voice-input-mimo `server.py`.
 
-Caveat: MLX `mx.metal.get_active_memory()` only works inside the server
-process. Until the server exposes an `/admin/memory` endpoint, this script
-profiles RSS only (which already covers the unbounded-cache regression we
-care about for Phase 0).
+Memory metrics:
+  - phys_mb (PRIMARY): macOS phys_footprint via `vmmap --summary`. Matches
+    Activity Monitor "Memory" column. Includes mmap'd MLX model weights —
+    which is what we actually want to track. Linux: None.
+  - rss_mb (BACKUP): psutil RSS. On macOS this misses mmap'd pages (often
+    reads ~100 MB even though phys is 5+ GB), kept for cross-platform
+    comparability.
+
+MLX `mx.metal.get_active_memory()` only works inside the server process.
+Until the server exposes an `/admin/memory` endpoint, this script profiles
+process-level memory only — which already covers the unbounded-cache
+regression we care about for Phase 0.
 
 Usage:
     python scripts/bench_memory.py \\
@@ -21,6 +29,8 @@ from __future__ import annotations
 import argparse
 import asyncio
 import json
+import platform
+import subprocess
 import time
 from pathlib import Path
 
@@ -28,6 +38,36 @@ import httpx
 import psutil
 
 from _baseline_meta import git_meta, host_meta
+
+
+def _parse_size_to_mb(s: str) -> float:
+    s = s.strip()
+    if s.endswith("G"):
+        return float(s[:-1]) * 1024
+    if s.endswith("M"):
+        return float(s[:-1])
+    if s.endswith("K"):
+        return float(s[:-1]) / 1024
+    return float(s) / (1024 * 1024)
+
+
+def _sample_phys_footprint_mb(pid: int) -> float | None:
+    """macOS Activity-Monitor-equivalent memory; None on Linux/error."""
+    if platform.system() != "Darwin":
+        return None
+    try:
+        out = subprocess.check_output(
+            ["vmmap", "--summary", str(pid)],
+            text=True,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, FileNotFoundError):
+        return None
+    for line in out.splitlines():
+        if line.startswith("Physical footprint:"):
+            return _parse_size_to_mb(line.split(":", 1)[1].strip())
+    return None
 
 
 async def _hit_server(client: httpx.AsyncClient, url: str, audio_path: Path, language: str) -> tuple[int, float]:
@@ -40,8 +80,10 @@ async def _hit_server(client: httpx.AsyncClient, url: str, audio_path: Path, lan
     return resp.status_code, elapsed_ms
 
 
-def _sample_rss(pid: int) -> float:
-    return psutil.Process(pid).memory_info().rss / (1024 * 1024)
+def _sample_memory(pid: int) -> dict:
+    rss_mb = psutil.Process(pid).memory_info().rss / (1024 * 1024)
+    phys_mb = _sample_phys_footprint_mb(pid)
+    return {"rss_mb": rss_mb, "phys_mb": phys_mb}
 
 
 async def _idle_sample(pid: int, duration_s: int, interval_s: float = 1.0) -> list[dict]:
@@ -49,7 +91,7 @@ async def _idle_sample(pid: int, duration_s: int, interval_s: float = 1.0) -> li
     deadline = time.perf_counter() + duration_s
     t0 = time.perf_counter()
     while time.perf_counter() < deadline:
-        samples.append({"t": time.perf_counter() - t0, "rss_mb": _sample_rss(pid)})
+        samples.append({"t": time.perf_counter() - t0, **_sample_memory(pid)})
         await asyncio.sleep(interval_s)
     return samples
 
@@ -69,29 +111,46 @@ async def main() -> None:
     if not args.audio.exists():
         raise SystemExit(f"audio not found: {args.audio}")
 
-    cold_rss = _sample_rss(args.server_pid)
+    cold = _sample_memory(args.server_pid)
 
     request_runs: list[dict] = []
     async with httpx.AsyncClient() as client:
         for i in range(args.runs):
-            pre_rss = _sample_rss(args.server_pid)
+            pre = _sample_memory(args.server_pid)
             status, ms = await _hit_server(client, args.server_url, args.audio, args.language)
-            post_rss = _sample_rss(args.server_pid)
+            post = _sample_memory(args.server_pid)
             request_runs.append({
                 "i": i,
                 "status": status,
                 "ms": ms,
-                "pre_rss_mb": pre_rss,
-                "post_rss_mb": post_rss,
-                "delta_rss_mb": post_rss - pre_rss,
+                "pre": pre,
+                "post": post,
+                "delta_phys_mb": (
+                    post["phys_mb"] - pre["phys_mb"]
+                    if post["phys_mb"] is not None and pre["phys_mb"] is not None
+                    else None
+                ),
+                "delta_rss_mb": post["rss_mb"] - pre["rss_mb"],
             })
 
     idle_samples = await _idle_sample(args.server_pid, args.idle_secs)
-    post_idle_rss = idle_samples[-1]["rss_mb"] if idle_samples else _sample_rss(args.server_pid)
-    peak_rss = max([cold_rss, *(r["post_rss_mb"] for r in request_runs), *(s["rss_mb"] for s in idle_samples)])
+    post_idle = idle_samples[-1] if idle_samples else _sample_memory(args.server_pid)
+
+    def _all_phys() -> list[float]:
+        out = [cold["phys_mb"]] if cold["phys_mb"] is not None else []
+        out += [r["post"]["phys_mb"] for r in request_runs if r["post"]["phys_mb"] is not None]
+        out += [s["phys_mb"] for s in idle_samples if s.get("phys_mb") is not None]
+        return out
+
+    def _all_rss() -> list[float]:
+        return [cold["rss_mb"], *(r["post"]["rss_mb"] for r in request_runs), *(s["rss_mb"] for s in idle_samples)]
+
+    phys_values = _all_phys()
+    peak_phys_mb = max(phys_values) if phys_values else None
+    peak_rss_mb = max(_all_rss())
 
     result = {
-        "schema_version": 1,
+        "schema_version": 2,
         "metric": "memory",
         "baseline_version": git_meta(args.repo_path),
         "host": host_meta(),
@@ -104,21 +163,31 @@ async def main() -> None:
             "idle_secs": args.idle_secs,
         },
         "summary": {
-            "cold_rss_mb": cold_rss,
-            "peak_rss_mb": peak_rss,
-            "post_idle_rss_mb": post_idle_rss,
-            "idle_drop_mb": peak_rss - post_idle_rss,
+            "cold_phys_mb": cold["phys_mb"],
+            "cold_rss_mb": cold["rss_mb"],
+            "peak_phys_mb": peak_phys_mb,
+            "peak_rss_mb": peak_rss_mb,
+            "post_idle_phys_mb": post_idle.get("phys_mb"),
+            "post_idle_rss_mb": post_idle["rss_mb"],
+            "idle_drop_phys_mb": (
+                peak_phys_mb - post_idle["phys_mb"]
+                if peak_phys_mb is not None and post_idle.get("phys_mb") is not None
+                else None
+            ),
+            "idle_drop_rss_mb": peak_rss_mb - post_idle["rss_mb"],
         },
         "request_runs": request_runs,
         "idle_samples": idle_samples,
     }
     args.out.parent.mkdir(parents=True, exist_ok=True)
     args.out.write_text(json.dumps(result, indent=2, ensure_ascii=False))
+    s = result["summary"]
     print(f"wrote {args.out}")
-    print(f"  cold_rss_mb       = {cold_rss:.1f}")
-    print(f"  peak_rss_mb       = {peak_rss:.1f}")
-    print(f"  post_idle_rss_mb  = {post_idle_rss:.1f}")
-    print(f"  idle_drop_mb      = {peak_rss - post_idle_rss:.1f}")
+    print(f"  cold_phys_mb       = {s['cold_phys_mb']}")
+    print(f"  peak_phys_mb       = {s['peak_phys_mb']}")
+    print(f"  post_idle_phys_mb  = {s['post_idle_phys_mb']}")
+    print(f"  idle_drop_phys_mb  = {s['idle_drop_phys_mb']}")
+    print(f"  (rss for backup)   cold={s['cold_rss_mb']:.1f}  peak={s['peak_rss_mb']:.1f}  post_idle={s['post_idle_rss_mb']:.1f}")
 
 
 if __name__ == "__main__":

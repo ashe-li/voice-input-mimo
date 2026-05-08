@@ -353,15 +353,19 @@ async def transcribe(
         log.exception(f"[req={request_id}] Transcription failed")
         raise HTTPException(status_code=500, detail=str(e))
     finally:
-        tracker.trim_metal_cache()
         try:
             tmp_path.unlink()
         except OSError:
             pass
+        # Post-response housekeeping — runs OFF the response path so that the
+        # FastAPI response writes & connection flush complete immediately.
+        # If this work runs synchronously in finally, URLSession on macOS
+        # marks the connection unhealthy after 4s of "still busy" → forces
+        # cold reconnect on next POST (~1s tax). Verified against raw
+        # server.py baseline: same uvicorn, same client, the only difference
+        # was these three calls in the finally block.
         idle_status = asr_model.idle_window.status() if asr_model.idle_window is not None else None
-        # snapshot() uses TTL cache (default 5s). Hot path = no vmmap subprocess.
-        snap = tracker.snapshot()
-        emit_request_jsonl({
+        jsonl_payload = {
             "request_id": request_id,
             "event": "transcribe",
             "received_at": received_at,
@@ -381,9 +385,16 @@ async def transcribe(
             "error": err,
             "asr_idle_level": idle_status["level"] if idle_status else None,
             "asr_idle_window_s": idle_status["current_window_seconds"] if idle_status else None,
-            "phys_mb": snap.get("phys_mb"),
-            "rss_mb": snap.get("rss_mb"),
-        })
+        }
+
+        async def _post_response_work():
+            tracker.trim_metal_cache()
+            snap = tracker.snapshot()
+            jsonl_payload["phys_mb"] = snap.get("phys_mb")
+            jsonl_payload["rss_mb"] = snap.get("rss_mb")
+            emit_request_jsonl(jsonl_payload)
+
+        asyncio.create_task(_post_response_work())
 
 
 @app.get("/admin/memory")

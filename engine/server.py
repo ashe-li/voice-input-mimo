@@ -32,7 +32,7 @@ from typing import Dict, List, Optional
 
 import soundfile as sf
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
 from engine.adaptive_idle import AdaptiveIdleWindow
 from engine.lifecycle import LazyModel
@@ -48,12 +48,39 @@ PRECISION = os.environ.get("MIMO_PRECISION", "int4")
 MODEL_ROOT = Path(os.environ.get("MIMO_MODEL_ROOT", str(Path.home() / ".cache/mimo-asr")))
 DEFAULT_LANGUAGE = os.environ.get("MIMO_DEFAULT_LANGUAGE", "auto")
 OPENCC_CONFIG = os.environ.get("MIMO_OPENCC_CONFIG", "s2twp").strip()
+# Ruleset lives in sibling voice-input-mimo/server repo; path is relative so it
+# works on any machine where both repos are siblings under a common parent.
+# Override via MIMO_ZHTW_RULESET env if layout differs.
+_REPO_ROOT = Path(__file__).resolve().parent.parent
 ZHTW_RULESET_PATH = Path(os.environ.get(
     "MIMO_ZHTW_RULESET",
-    "/Users/shiun/Documents/voice-input-mimo/server/zhtw_ruleset.json",
+    str(_REPO_ROOT.parent / "voice-input-mimo" / "server" / "zhtw_ruleset.json"),
 ))
 
 METAL_CACHE_LIMIT_MB = int(os.environ.get("ENGINE_METAL_CACHE_LIMIT_MB", "1024"))
+
+# Reject audio uploads larger than this. Localhost-bound but defense-in-depth.
+MAX_AUDIO_BYTES = int(os.environ.get("ENGINE_MAX_AUDIO_BYTES", str(50 * 1024 * 1024)))
+
+# Redact transcribe text in engine.log + transcribe.jsonl. Default off (dev
+# convenience). Flip to 1 if you'll dictate sensitive content (tokens,
+# passwords, internal docs) — text becomes "[redacted N chars]" instead of plain.
+LOG_REDACT_TEXT = os.environ.get("ENGINE_LOG_REDACT_TEXT", "0").strip() == "1"
+
+# admin endpoints (/admin/memory, /admin/evict, /admin/qwen/*) have no auth.
+# uvicorn binds to whatever HOST is passed at startup. Warn loudly if not localhost.
+_HOST_ENV = os.environ.get("HOST", "127.0.0.1").strip()
+if _HOST_ENV not in ("127.0.0.1", "localhost", "::1", ""):
+    log.warning(
+        f"engine HOST={_HOST_ENV} — admin endpoints unauth, exposed beyond localhost!"
+    )
+
+
+def _redact(text: str) -> str:
+    """Replace text with length-only marker if LOG_REDACT_TEXT enabled."""
+    if not LOG_REDACT_TEXT or not text:
+        return text
+    return f"[redacted {len(text)} chars]"
 
 
 def _parse_ladder(raw: str) -> tuple:
@@ -252,6 +279,11 @@ async def transcribe(
     ).strip() or f"engine-{int(time.time()*1000)}"
     received_at = time.time()
     raw = await file.read()
+    if len(raw) > MAX_AUDIO_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"audio too large: {len(raw)} bytes (max {MAX_AUDIO_BYTES})",
+        )
     suffix = Path(file.filename or "audio.wav").suffix or ".wav"
     with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
         tmp.write(raw)
@@ -301,11 +333,13 @@ async def transcribe(
 
         log.info(
             "[req=%s] Transcribed in %.2fs (+ OpenCC %.0fms, locale=%s, cold=%s): %r → %r",
-            request_id, asr_elapsed, cc_elapsed * 1000, locale, cold_load, raw_text, text,
+            request_id, asr_elapsed, cc_elapsed * 1000, locale, cold_load,
+            _redact(raw_text), _redact(text),
         )
 
         if response_format == "text":
-            return JSONResponse(content=text, media_type="text/plain")
+            # Whisper-compatible: plain UTF-8 body, NOT JSON-encoded string.
+            return PlainTextResponse(content=text)
         return {
             "text": text,
             "raw_text": raw_text if text != raw_text else None,
@@ -342,8 +376,8 @@ async def transcribe(
             "cold_load": cold_load,
             "asr_elapsed_ms": int(asr_elapsed * 1000),
             "post_elapsed_ms": int(cc_elapsed * 1000),
-            "raw_text": raw_text,
-            "text": text,
+            "raw_text": _redact(raw_text),
+            "text": _redact(text),
             "error": err,
             "asr_idle_level": idle_status["level"] if idle_status else None,
             "asr_idle_window_s": idle_status["current_window_seconds"] if idle_status else None,

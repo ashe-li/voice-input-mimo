@@ -196,11 +196,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // overlay back into .refining and start a phase timer that nobody
             // stops (orphan tick → "Refining 42.7s" stuck).
             refiningHoldWork?.cancel()
+            let translating = refiner.claudeCodeModeEnabled
             let work = DispatchWorkItem { [weak self] in
                 guard let self else { return }
-                self.overlayPanel.transition(to: .refining(zh: self.currentZH, elapsed: 0))
+                self.overlayPanel.transition(to: .refining(zh: self.currentZH, elapsed: 0, translating: translating))
                 self.startPhaseTimer { [weak self] elapsed in
-                    .refining(zh: self?.currentZH ?? "", elapsed: elapsed)
+                    .refining(zh: self?.currentZH ?? "", elapsed: elapsed, translating: translating)
                 }
             }
             refiningHoldWork = work

@@ -1,6 +1,6 @@
 import Foundation
 
-enum SkillCategory: String, Codable, CaseIterable {
+enum SkillCategory: String, Codable, CaseIterable, Sendable {
     case recovery
     case style
     case format
@@ -8,7 +8,7 @@ enum SkillCategory: String, Codable, CaseIterable {
     case speechAct
 }
 
-struct PromptSkill: Codable, Identifiable, Equatable {
+struct PromptSkill: Codable, Identifiable, Equatable, Sendable {
     let id: String
     var name: String
     var category: SkillCategory
@@ -36,7 +36,7 @@ struct PromptSkill: Codable, Identifiable, Equatable {
     }
 }
 
-struct PromptProfile: Codable, Identifiable, Equatable {
+struct PromptProfile: Codable, Identifiable, Equatable, Sendable {
     let id: String
     var name: String
     var mode: RefineMode
@@ -82,7 +82,7 @@ struct PromptProfile: Codable, Identifiable, Equatable {
     }
 }
 
-struct ActiveSelection: Codable, Equatable {
+struct ActiveSelection: Codable, Equatable, Sendable {
     var refineProfileID: String
     var claudeCodeProfileID: String
 

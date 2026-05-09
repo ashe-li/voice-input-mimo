@@ -3,7 +3,7 @@ import os.log
 
 private let logger = Logger(subsystem: "com.yetone.VoiceInput", category: "LLMRefiner")
 
-enum RefineMode: String, Codable {
+enum RefineMode: String, Codable, Sendable {
     case refine        // Original: cleanup-only, keep language
     case claudeCode    // Cleanup + Chinese→English + append zh-TW suffix
 }

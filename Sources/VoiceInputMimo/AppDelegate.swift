@@ -12,12 +12,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var isRecording = false
 
     private var enableMenuItem: NSMenuItem!
-    private var llmMenuItem: NSMenuItem!
-    private var claudeCodeMenuItem: NSMenuItem!
+    private var outputModeMenuItem: NSMenuItem!
+    private var englishOutputMenuItem: NSMenuItem!
+    private var chineseOutputMenuItem: NSMenuItem!
+    private var refinedChineseOutputMenuItem: NSMenuItem!
     private var asrServerMenuItem: NSMenuItem!
     private var asrServerStatusMenuItem: NSMenuItem!
     private lazy var settingsWindow = SettingsWindow()
     private lazy var clipboardHistoryWindow = ClipboardHistoryWindow()
+    private lazy var modelMemoryWindow = ModelMemoryWindow()
 
     // Phase progress timer (drives the elapsed-time counter shown in the overlay)
     private var phaseTimer: Timer?
@@ -36,8 +39,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSLog("[AppDelegate] launch preview=%@", isPreviewMode ? "YES" : "NO")
         terminateConflictingApps()
         setupStatusBar()
+
+        if ProcessInfo.processInfo.environment["VOICE_INPUT_MIMO_PREVIEW"] == "1" {
+            installPreviewArchive()
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                self?.openClipboardHistory()
+                self?.openModelMemory()
+            }
+            return
+        }
+
         setupAudioCallbacks()
 
         AudioRecorder.requestPermissions { [weak self] granted, errorMsg in
@@ -74,8 +88,49 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    private func installPreviewArchive() {
+        let path = ProcessInfo.processInfo.environment["VOICE_INPUT_MIMO_ARCHIVE_PATH"]
+            ?? "\(NSTemporaryDirectory())voice-input-mimo-preview-archive.txt"
+        let url = URL(fileURLWithPath: path)
+        let sample = """
+        ─── 2026-05-09T05:40:00Z | session ───
+        Chinese (ASR)
+        請把 clipboard history 修成真的清單，並且每次 session 都保留中文原文。
+
+        English / Output
+        Fix the clipboard history so it shows a real list, and preserve the Chinese source text for every session.
+
+        ─── 2026-05-09T05:38:00Z | session ───
+        Chinese (ASR)
+        這個模式關掉以後應該會只貼中文 ASR 原文。
+
+        English / Output
+        When this mode is off, paste only the Chinese ASR transcript.
+
+        ─── 2026-05-09T05:35:00Z | clipboard ───
+        Previous clipboard content before VoiceInputMimo pasted output.
+
+        """
+        try? FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
+        try? sample.write(to: url, atomically: true, encoding: .utf8)
+        setenv("VOICE_INPUT_MIMO_ARCHIVE_PATH", url.path, 1)
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        NSLog("[AppDelegate] will terminate preview=%@", isPreviewMode ? "YES" : "NO")
+        if isPreviewMode { return }
         LocalASRServer.shared.stop()
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        false
+    }
+
+    private var isPreviewMode: Bool {
+        ProcessInfo.processInfo.environment["VOICE_INPUT_MIMO_PREVIEW"] == "1"
     }
 
     // MARK: - Key events
@@ -180,6 +235,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// the English. Overlay handles dismissal internally after `overlayLingerSeconds`.
     private func completeWithEnglish(_ english: String) {
         overlayPanel.transition(to: .bothReady(zh: currentZH, en: english))
+        ClipboardArchive.shared.saveSession(zh: currentZH, english: english)
         injectImmediately(english)
     }
 
@@ -188,6 +244,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func completeWithoutTranslation(_ text: String) {
         // Promote to bothReady with EN duplicated, so the linger countdown engages.
         overlayPanel.transition(to: .bothReady(zh: text, en: text))
+        ClipboardArchive.shared.saveSession(zh: text, english: text)
         injectImmediately(text)
     }
 
@@ -277,43 +334,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let menu = NSMenu()
 
-        enableMenuItem = NSMenuItem(title: "Enabled", action: #selector(toggleEnabled), keyEquivalent: "")
+        enableMenuItem = NSMenuItem(title: "啟用 VoiceInputMimo", action: #selector(toggleEnabled), keyEquivalent: "")
         enableMenuItem.target = self
         enableMenuItem.state = .on
         menu.addItem(enableMenuItem)
 
         menu.addItem(.separator())
 
-        // Claude Code Mode toggle
-        claudeCodeMenuItem = NSMenuItem(
-            title: "Claude Code Mode (中譯英 + 繁中 suffix)",
-            action: #selector(toggleClaudeCodeMode),
+        outputModeMenuItem = NSMenuItem(title: "輸出模式", action: nil, keyEquivalent: "")
+        let outputMenu = NSMenu()
+
+        englishOutputMenuItem = NSMenuItem(
+            title: "英文 Prompt（附回覆語言要求）",
+            action: #selector(selectEnglishOutputMode),
             keyEquivalent: "v"
         )
-        claudeCodeMenuItem.keyEquivalentModifierMask = [.command, .option]
-        claudeCodeMenuItem.target = self
-        claudeCodeMenuItem.state = LLMRefiner.shared.claudeCodeModeEnabled ? .on : .off
-        menu.addItem(claudeCodeMenuItem)
+        englishOutputMenuItem.keyEquivalentModifierMask = [.command, .option]
+        englishOutputMenuItem.target = self
+        outputMenu.addItem(englishOutputMenuItem)
+
+        chineseOutputMenuItem = NSMenuItem(
+            title: "中文 ASR 原文（最快）",
+            action: #selector(selectChineseOutputMode),
+            keyEquivalent: ""
+        )
+        chineseOutputMenuItem.target = self
+        outputMenu.addItem(chineseOutputMenuItem)
+
+        refinedChineseOutputMenuItem = NSMenuItem(
+            title: "中文 LLM 修正（不翻譯）",
+            action: #selector(selectRefinedChineseOutputMode),
+            keyEquivalent: ""
+        )
+        refinedChineseOutputMenuItem.target = self
+        outputMenu.addItem(refinedChineseOutputMenuItem)
+
+        outputMenu.addItem(.separator())
+
+        let outputHelpItem = NSMenuItem(
+            title: "每次 session 會保留 ASR 原文與貼上內容",
+            action: nil,
+            keyEquivalent: ""
+        )
+        outputHelpItem.isEnabled = false
+        outputMenu.addItem(outputHelpItem)
+
+        outputModeMenuItem.submenu = outputMenu
+        menu.addItem(outputModeMenuItem)
+        refreshOutputModeMenu()
+
+        // Clipboard History viewer
+        let historyItem = NSMenuItem(
+            title: "Clipboard History...",
+            action: #selector(openClipboardHistory),
+            keyEquivalent: "h"
+        )
+        historyItem.keyEquivalentModifierMask = [.command, .option]
+        historyItem.target = self
+        menu.addItem(historyItem)
+
+        let memoryItem = NSMenuItem(
+            title: "Model Memory...",
+            action: #selector(openModelMemory),
+            keyEquivalent: "m"
+        )
+        memoryItem.keyEquivalentModifierMask = [.command, .option]
+        memoryItem.target = self
+        menu.addItem(memoryItem)
 
         menu.addItem(.separator())
-
-        // LLM Refinement submenu
-        let llmItem = NSMenuItem(title: "LLM Refinement", action: nil, keyEquivalent: "")
-        let llmMenu = NSMenu()
-
-        llmMenuItem = NSMenuItem(title: "Enabled", action: #selector(toggleLLM), keyEquivalent: "")
-        llmMenuItem.target = self
-        llmMenuItem.state = LLMRefiner.shared.isEnabled ? .on : .off
-        llmMenu.addItem(llmMenuItem)
-
-        llmMenu.addItem(.separator())
-
-        let settingsItem = NSMenuItem(title: "Settings...", action: #selector(openSettings), keyEquivalent: "")
-        settingsItem.target = self
-        llmMenu.addItem(settingsItem)
-
-        llmItem.submenu = llmMenu
-        menu.addItem(llmItem)
 
         // ASR Server submenu
         let asrItem = NSMenuItem(title: "ASR Server", action: nil, keyEquivalent: "")
@@ -344,15 +433,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         asrItem.submenu = asrSubmenu
         menu.addItem(asrItem)
 
-        // Clipboard History viewer
-        let historyItem = NSMenuItem(
-            title: "Clipboard History...",
-            action: #selector(openClipboardHistory),
-            keyEquivalent: "h"
-        )
-        historyItem.keyEquivalentModifierMask = [.command, .option]
-        historyItem.target = self
-        menu.addItem(historyItem)
+        menu.addItem(.separator())
+
+        let settingsItem = NSMenuItem(title: "偏好設定...", action: #selector(openSettings), keyEquivalent: ",")
+        settingsItem.target = self
+        menu.addItem(settingsItem)
 
         menu.addItem(.separator())
 
@@ -389,30 +474,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    @objc private func toggleLLM() {
+    @objc private func selectEnglishOutputMode() {
         let refiner = LLMRefiner.shared
-        refiner.isEnabled.toggle()
-        llmMenuItem.state = refiner.isEnabled ? .on : .off
+        refiner.isEnabled = true
+        refiner.claudeCodeModeEnabled = true
+        refreshOutputModeMenu()
     }
 
-    @objc private func toggleClaudeCodeMode() {
+    @objc private func selectChineseOutputMode() {
         let refiner = LLMRefiner.shared
-        refiner.claudeCodeModeEnabled.toggle()
-        claudeCodeMenuItem.state = refiner.claudeCodeModeEnabled ? .on : .off
-        if refiner.claudeCodeModeEnabled && !refiner.isEnabled {
-            refiner.isEnabled = true
-            llmMenuItem.state = .on
+        refiner.isEnabled = false
+        refiner.claudeCodeModeEnabled = false
+        refreshOutputModeMenu()
+    }
+
+    @objc private func selectRefinedChineseOutputMode() {
+        let refiner = LLMRefiner.shared
+        refiner.isEnabled = true
+        refiner.claudeCodeModeEnabled = false
+        refreshOutputModeMenu()
+    }
+
+    private func refreshOutputModeMenu() {
+        let refiner = LLMRefiner.shared
+        let isEnglish = refiner.isEnabled && refiner.claudeCodeModeEnabled
+        let isRefinedChinese = refiner.isEnabled && !refiner.claudeCodeModeEnabled
+        let isChinese = !refiner.isEnabled
+
+        englishOutputMenuItem.state = isEnglish ? .on : .off
+        chineseOutputMenuItem.state = isChinese ? .on : .off
+        refinedChineseOutputMenuItem.state = isRefinedChinese ? .on : .off
+
+        if isEnglish {
+            outputModeMenuItem.title = "輸出模式：英文 Prompt"
+        } else if isRefinedChinese {
+            outputModeMenuItem.title = "輸出模式：中文修正"
+        } else {
+            outputModeMenuItem.title = "輸出模式：中文 ASR"
         }
     }
 
     @objc private func openSettings() {
         settingsWindow.makeKeyAndOrderFront(nil)
+        if ProcessInfo.processInfo.environment["VOICE_INPUT_MIMO_PREVIEW"] == "1" {
+            settingsWindow.orderFrontRegardless()
+        }
         NSApp.activate(ignoringOtherApps: true)
     }
 
     @objc private func openClipboardHistory() {
         clipboardHistoryWindow.makeKeyAndOrderFront(nil)
+        if ProcessInfo.processInfo.environment["VOICE_INPUT_MIMO_PREVIEW"] == "1" {
+            clipboardHistoryWindow.orderFrontRegardless()
+        }
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func openModelMemory() {
+        modelMemoryWindow.showAndStart()
     }
 
     // MARK: - ASR server controls

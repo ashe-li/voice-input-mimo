@@ -48,6 +48,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
                 self?.openClipboardHistory()
                 self?.openModelMemory()
+                // Auto-open Settings in PREVIEW so smoke tests can drive
+                // pane switching via osascript without having to click the
+                // status bar item (which lives in SystemUIServer, not in
+                // this process's accessibility tree).
+                self?.openSettings()
             }
             return
         }

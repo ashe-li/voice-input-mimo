@@ -4,8 +4,8 @@ import AppKit
 ///
 /// Layout (top → bottom):
 ///   • Toolbar row:  Refresh · Reveal in Finder · Clear All
-///   • Split:
-///       — Left  : NSTableView of entries (newest first), columns Time / Preview
+///   • Content:
+///       — Left  : visible NSTableView of entries (newest first)
 ///       — Right : NSTextView showing full content of selected entry
 ///   • Action row:  Copy · Delete · status label
 final class ClipboardHistoryWindow: NSPanel, NSTableViewDataSource, NSTableViewDelegate {
@@ -23,16 +23,16 @@ final class ClipboardHistoryWindow: NSPanel, NSTableViewDataSource, NSTableViewD
     init() {
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 760, height: 520),
-            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
         title = "Clipboard History"
         isReleasedWhenClosed = false
-        titlebarAppearsTransparent = true
+        titlebarAppearsTransparent = false
         titleVisibility = .visible
         toolbarStyle = .unified
-        minSize = NSSize(width: 600, height: 400)
+        minSize = NSSize(width: 720, height: 420)
 
         if let cv = contentView {
             cv.wantsLayer = true
@@ -65,7 +65,7 @@ final class ClipboardHistoryWindow: NSPanel, NSTableViewDataSource, NSTableViewD
             iv.symbolConfiguration = .init(pointSize: 14, weight: .semibold)
             header.addArrangedSubview(iv)
         }
-        let titleLabel = NSTextField(labelWithString: "Pre-Paste Clipboard Snapshots")
+        let titleLabel = NSTextField(labelWithString: "Voice Sessions & Clipboard Snapshots")
         titleLabel.font = .systemFont(ofSize: 14, weight: .semibold)
         header.addArrangedSubview(titleLabel)
         header.addArrangedSubview(NSView())  // spacer
@@ -82,19 +82,24 @@ final class ClipboardHistoryWindow: NSPanel, NSTableViewDataSource, NSTableViewD
         header.addArrangedSubview(clearButton)
 
         // Table
+        let kindColumn = NSTableColumn(identifier: .init("kind"))
+        kindColumn.title = "Type"
+        kindColumn.width = 112
+        kindColumn.minWidth = 96
         let timeColumn = NSTableColumn(identifier: .init("time"))
         timeColumn.title = "Time"
-        timeColumn.width = 180
-        timeColumn.minWidth = 140
+        timeColumn.width = 108
+        timeColumn.minWidth = 96
         let previewColumn = NSTableColumn(identifier: .init("preview"))
         previewColumn.title = "Preview"
-        previewColumn.width = 380
-        previewColumn.minWidth = 200
+        previewColumn.width = 220
+        previewColumn.minWidth = 160
+        table.addTableColumn(kindColumn)
         table.addTableColumn(timeColumn)
         table.addTableColumn(previewColumn)
         table.dataSource = self
         table.delegate = self
-        table.rowHeight = 24
+        table.rowHeight = 28
         table.usesAlternatingRowBackgroundColors = true
         table.style = .inset
         table.target = self
@@ -120,13 +125,14 @@ final class ClipboardHistoryWindow: NSPanel, NSTableViewDataSource, NSTableViewD
         detailScroll.translatesAutoresizingMaskIntoConstraints = false
         detailScroll.drawsBackground = false
 
-        let split = NSSplitView()
-        split.isVertical = true
-        split.dividerStyle = .thin
-        split.translatesAutoresizingMaskIntoConstraints = false
-        split.addArrangedSubview(tableScroll)
-        split.addArrangedSubview(detailScroll)
-        split.setHoldingPriority(.init(260), forSubviewAt: 0)
+        let contentRow = NSStackView(views: [tableScroll, detailScroll])
+        contentRow.orientation = .horizontal
+        contentRow.alignment = .top
+        contentRow.spacing = 12
+        contentRow.distribution = .fill
+        contentRow.translatesAutoresizingMaskIntoConstraints = false
+        tableScroll.setContentHuggingPriority(.defaultHigh, for: .horizontal)
+        detailScroll.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
         // Bottom row
         copyButton.target = self
@@ -150,7 +156,7 @@ final class ClipboardHistoryWindow: NSPanel, NSTableViewDataSource, NSTableViewD
         bottom.translatesAutoresizingMaskIntoConstraints = false
         statusLabel.setContentHuggingPriority(.defaultLow, for: .horizontal)
 
-        for sub in [header, split, bottom] {
+        for sub in [header, contentRow, bottom] {
             sub.translatesAutoresizingMaskIntoConstraints = false
             cv.addSubview(sub)
         }
@@ -160,11 +166,14 @@ final class ClipboardHistoryWindow: NSPanel, NSTableViewDataSource, NSTableViewD
             header.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
             header.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
 
-            split.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 12),
-            split.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
-            split.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
+            contentRow.topAnchor.constraint(equalTo: header.bottomAnchor, constant: 12),
+            contentRow.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            contentRow.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
+            tableScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 360),
+            tableScroll.widthAnchor.constraint(lessThanOrEqualTo: cv.widthAnchor, multiplier: 0.58),
+            detailScroll.widthAnchor.constraint(greaterThanOrEqualToConstant: 300),
 
-            bottom.topAnchor.constraint(equalTo: split.bottomAnchor, constant: 12),
+            bottom.topAnchor.constraint(equalTo: contentRow.bottomAnchor, constant: 12),
             bottom.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
             bottom.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
             bottom.bottomAnchor.constraint(equalTo: cv.bottomAnchor, constant: -16),
@@ -180,9 +189,9 @@ final class ClipboardHistoryWindow: NSPanel, NSTableViewDataSource, NSTableViewD
         updateButtonsEnabled()
         if entries.isEmpty {
             detailView.string = ""
-            statusLabel.stringValue = "No snapshots yet — paste once to populate."
+            statusLabel.stringValue = "No entries yet. Voice sessions appear here after each completed dictation."
         } else {
-            statusLabel.stringValue = "\(entries.count) snapshot\(entries.count == 1 ? "" : "s")"
+            statusLabel.stringValue = "\(entries.count) entr\(entries.count == 1 ? "y" : "ies")"
             // Auto-select first row
             table.selectRowIndexes(IndexSet(integer: 0), byExtendingSelection: false)
         }
@@ -274,9 +283,17 @@ final class ClipboardHistoryWindow: NSPanel, NSTableViewDataSource, NSTableViewD
                 tf.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
             ])
         }
-        cell.textField?.stringValue = id == "time"
-            ? Self.formatStamp(entry.timestamp)
-            : entry.preview
+        switch id {
+        case "kind":
+            cell.textField?.stringValue = entry.kind.displayName
+            cell.textField?.textColor = entry.kind == .session ? .controlAccentColor : .secondaryLabelColor
+        case "time":
+            cell.textField?.stringValue = Self.formatStamp(entry.timestamp)
+            cell.textField?.textColor = .secondaryLabelColor
+        default:
+            cell.textField?.stringValue = entry.preview
+            cell.textField?.textColor = .labelColor
+        }
         return cell
     }
 

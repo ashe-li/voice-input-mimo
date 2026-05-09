@@ -20,8 +20,21 @@ final class ClipboardArchive {
     private static let maxBytes: Int = 1024 * 1024  // 1 MB cap
     private static let entryTerminator = "\n\n"
 
+    enum EntryKind: String, Equatable {
+        case clipboard
+        case session
+
+        var displayName: String {
+            switch self {
+            case .clipboard: return "Clipboard"
+            case .session: return "Voice Session"
+            }
+        }
+    }
+
     struct Entry: Equatable {
         let timestamp: String
+        let kind: EntryKind
         let content: String
         var preview: String {
             let oneLine = content
@@ -33,6 +46,15 @@ final class ClipboardArchive {
     }
 
     let archiveURL: URL = {
+        if let path = ProcessInfo.processInfo.environment["VOICE_INPUT_MIMO_ARCHIVE_PATH"],
+           !path.isEmpty {
+            let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+            try? FileManager.default.createDirectory(
+                at: url.deletingLastPathComponent(),
+                withIntermediateDirectories: true
+            )
+            return url
+        }
         let base = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/VoiceInputMimo")
         try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
@@ -48,10 +70,24 @@ final class ClipboardArchive {
 
     /// Save a pre-paste snapshot. Skips if disabled or text empty/nil.
     func save(_ text: String?) {
-        guard isEnabled, let text, !text.isEmpty else { return }
+        guard let text else { return }
+        saveContent(text, kind: .clipboard)
+    }
+
+    /// Save the voice-input session immediately, instead of waiting for the next
+    /// paste to capture the previous clipboard. This preserves both ASR source
+    /// text and final output for each session.
+    func saveSession(zh: String, english: String) {
+        let content = Self.formatSessionContent(zh: zh, english: english)
+        saveContent(content, kind: .session)
+    }
+
+    private func saveContent(_ text: String, kind: EntryKind) {
+        let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard isEnabled, !cleaned.isEmpty else { return }
 
         let stamp = ISO8601DateFormatter().string(from: Date())
-        let entry = "\(Self.separator)\(stamp) \(Self.separator)\n\(text)\(Self.entryTerminator)"
+        let entry = Self.serialize(Entry(timestamp: stamp, kind: kind, content: cleaned))
 
         let existing = (try? String(contentsOf: archiveURL, encoding: .utf8)) ?? ""
         let combined = entry + existing
@@ -103,7 +139,7 @@ final class ClipboardArchive {
 
     private func write(_ entries: [Entry]) {
         let body = entries
-            .map { "\(Self.separator)\($0.timestamp) \(Self.separator)\n\($0.content)\(Self.entryTerminator)" }
+            .map(Self.serialize)
             .joined()
         let trimmed = Self.truncate(body, to: Self.maxBytes)
         try? trimmed.write(to: archiveURL, atomically: true, encoding: .utf8)
@@ -128,10 +164,13 @@ final class ClipboardArchive {
             let afterPrefix = headerStart.upperBound
             // Find " ─── \n" terminating the header
             let stampSearchRange = afterPrefix..<raw.endIndex
-            guard let headerEnd = raw.range(of: " \(separator)\n", range: stampSearchRange) else {
+            let spacedHeaderEnd = raw.range(of: " \(separator)\n", range: stampSearchRange)
+            let compactHeaderEnd = raw.range(of: " ───\n", range: stampSearchRange)
+            guard let headerEnd = spacedHeaderEnd ?? compactHeaderEnd else {
                 break
             }
-            let stamp = String(raw[afterPrefix..<headerEnd.lowerBound])
+            let headerBody = String(raw[afterPrefix..<headerEnd.lowerBound])
+            let (stamp, kind) = Self.parseHeaderBody(headerBody)
             let contentStart = headerEnd.upperBound
 
             // Content runs to next "\n─── " or EOF
@@ -149,10 +188,48 @@ final class ClipboardArchive {
                 content.removeLast()
             }
 
-            entries.append(Entry(timestamp: stamp, content: content))
+            entries.append(Entry(timestamp: stamp, kind: kind, content: content))
             cursor = contentEnd
         }
         return entries
+    }
+
+    static func formatSessionContent(zh: String, english: String) -> String {
+        let cleanedZH = zh.trimmingCharacters(in: .whitespacesAndNewlines)
+        let cleanedEnglish = english.trimmingCharacters(in: .whitespacesAndNewlines)
+        if cleanedEnglish.isEmpty {
+            return """
+            Chinese (ASR)
+            \(cleanedZH)
+            """
+        }
+        if cleanedZH.isEmpty {
+            return """
+            English / Output
+            \(cleanedEnglish)
+            """
+        }
+        return """
+        Chinese (ASR)
+        \(cleanedZH)
+
+        English / Output
+        \(cleanedEnglish)
+        """
+    }
+
+    private static func serialize(_ entry: Entry) -> String {
+        let header = "\(entry.timestamp) | \(entry.kind.rawValue)"
+        return "\(separator)\(header) \(separator)\n\(entry.content)\(entryTerminator)"
+    }
+
+    private static func parseHeaderBody(_ raw: String) -> (String, EntryKind) {
+        let parts = raw.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
+        let stamp = parts.first.map { String($0).trimmingCharacters(in: .whitespaces) } ?? raw
+        let kind = parts.dropFirst().first
+            .map { String($0).trimmingCharacters(in: .whitespaces) }
+            .flatMap(EntryKind.init(rawValue:)) ?? .clipboard
+        return (stamp, kind)
     }
 
     /// Trim from end to fit byte cap, snapping to the last entry boundary.

@@ -22,7 +22,7 @@ final class LLMRefiner {
     }
 
     var apiKey: String {
-        get { UserDefaults.standard.string(forKey: "llmAPIKey") ?? "lm-studio" }
+        get { UserDefaults.standard.string(forKey: "llmAPIKey") ?? "local-api-key" }
         set { UserDefaults.standard.set(newValue, forKey: "llmAPIKey") }
     }
 
@@ -92,7 +92,7 @@ final class LLMRefiner {
     // Does NOT work on Qwen3.6-27B per LM Studio chat template.
     static let defaultClaudeCodePrompt = """
         /no_think You convert a developer's mixed Chinese/English voice input \
-        into clean English text for Claude Code.
+        into clean English text for a coding assistant.
 
         Speech act detection (CRITICAL — preserve speaker's intent):
         - REQUEST ("幫我X", "請X", "可以X嗎") → imperative ("Refactor X", "Add X")

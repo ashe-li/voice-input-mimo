@@ -1,6 +1,9 @@
 import AppKit
 
 final class SettingsWindow: NSPanel {
+    private let primaryShortcutPopup = NSPopUpButton()
+    private let secondaryShortcutPopup = NSPopUpButton()
+
     // ASR section
     private let asrBaseField = NSTextField()
     private let asrLanguagePopup = NSPopUpButton()
@@ -19,8 +22,17 @@ final class SettingsWindow: NSPanel {
     private let serverStatusLabel = NSTextField(labelWithString: "")
 
     // LLM section
-    private let llmEnabledCheckbox = NSButton(checkboxWithTitle: "Enable LLM (uncheck = ASR only, fastest)", target: nil, action: nil)
-    private let translateCheckbox = NSButton(checkboxWithTitle: "Translate to English (Claude Code mode)", target: nil, action: nil)
+    private let llmEnabledCheckbox = NSButton(
+        checkboxWithTitle: "啟用 LLM 後處理（關閉＝只貼中文 ASR）",
+        target: nil,
+        action: nil
+    )
+    private let translateCheckbox = NSButton(
+        checkboxWithTitle: "貼上英文 Prompt（附繁中回覆要求）",
+        target: nil,
+        action: nil
+    )
+    private let outputModeHelpLabel = NSTextField(labelWithString: "")
     private let llmBaseField = NSTextField()
     private let llmKeyField = NSTextField()
     private let llmModelField = NSTextField()
@@ -36,14 +48,14 @@ final class SettingsWindow: NSPanel {
 
     init() {
         super.init(
-            contentRect: NSRect(x: 0, y: 0, width: 640, height: 880),
-            styleMask: [.titled, .closable, .resizable, .fullSizeContentView],
+            contentRect: NSRect(x: 0, y: 0, width: 680, height: 960),
+            styleMask: [.titled, .closable, .resizable],
             backing: .buffered,
             defer: false
         )
-        title = "VoiceInputMimo Settings"
+        title = "VoiceInputMimo Preferences"
         isReleasedWhenClosed = false
-        titlebarAppearsTransparent = true
+        titlebarAppearsTransparent = false
         titleVisibility = .visible
         toolbarStyle = .unified
 
@@ -97,12 +109,26 @@ final class SettingsWindow: NSPanel {
     private func setupUI() {
         guard let cv = contentView else { return }
 
+        // Shortcuts section
+        for popup in [primaryShortcutPopup, secondaryShortcutPopup] {
+            popup.addItems(withTitles: ShortcutBinding.Preset.allCases.map(\.title))
+        }
+        let shortcutsHeader = sectionLabel("Shortcuts", icon: "keyboard")
+        let shortcutsGrid = NSGridView(views: [
+            [rightLabel("Shortcut 1:"), primaryShortcutPopup],
+            [rightLabel("Shortcut 2:"), secondaryShortcutPopup],
+        ])
+        shortcutsGrid.column(at: 0).xPlacement = .trailing
+        shortcutsGrid.rowSpacing = 10
+        shortcutsGrid.columnSpacing = 8
+        shortcutsGrid.translatesAutoresizingMaskIntoConstraints = false
+
         // ASR section
         asrBaseField.placeholderString = "http://127.0.0.1:8765"
         asrLanguagePopup.addItems(withTitles: ["auto", "zh", "en"])
         asrLocalePopup.addItems(withTitles: ["zh-TW", "none"])
 
-        let asrHeader = sectionLabel("ASR — MiMo-V2.5-ASR", icon: "waveform")
+        let asrHeader = sectionLabel("Speech Recognition", icon: "waveform")
         let asrGrid = NSGridView(views: [
             [rightLabel("Base URL:"), asrBaseField],
             [rightLabel("Language:"), asrLanguagePopup],
@@ -124,8 +150,8 @@ final class SettingsWindow: NSPanel {
 
         // LLM section
         llmBaseField.placeholderString = "http://localhost:1234/v1"
-        llmKeyField.placeholderString = "lm-studio"
-        llmModelField.placeholderString = "google/gemma-3-4b"
+        llmKeyField.placeholderString = "local-api-key"
+        llmModelField.placeholderString = "model-id"
 
         suffixField.isEditable = true
         suffixField.isRichText = false
@@ -136,11 +162,17 @@ final class SettingsWindow: NSPanel {
         suffixScroll.borderType = .lineBorder
         suffixScroll.translatesAutoresizingMaskIntoConstraints = false
 
-        let llmHeader = sectionLabel("LLM — LM Studio", icon: "brain.head.profile")
+        let llmHeader = sectionLabel("Text Refinement", icon: "brain.head.profile")
 
         llmEnabledCheckbox.translatesAutoresizingMaskIntoConstraints = false
         translateCheckbox.translatesAutoresizingMaskIntoConstraints = false
-        let togglesStack = NSStackView(views: [llmEnabledCheckbox, translateCheckbox])
+        outputModeHelpLabel.stringValue = "關閉英文模式：貼上中文 ASR 原文。開啟英文模式：貼上英文 prompt，History 保留中文 ASR 與英文輸出。"
+        outputModeHelpLabel.font = .systemFont(ofSize: 11)
+        outputModeHelpLabel.textColor = .secondaryLabelColor
+        outputModeHelpLabel.lineBreakMode = .byWordWrapping
+        outputModeHelpLabel.maximumNumberOfLines = 2
+        outputModeHelpLabel.translatesAutoresizingMaskIntoConstraints = false
+        let togglesStack = NSStackView(views: [llmEnabledCheckbox, translateCheckbox, outputModeHelpLabel])
         togglesStack.orientation = .vertical
         togglesStack.alignment = .leading
         togglesStack.spacing = 4
@@ -149,9 +181,9 @@ final class SettingsWindow: NSPanel {
         let llmGrid = NSGridView(views: [
             [rightLabel("Mode:"), togglesStack],
             [rightLabel("Base URL:"), llmBaseField],
-            [rightLabel("API Key:"), llmKeyField],
+            [rightLabel("API Key (optional):"), llmKeyField],
             [rightLabel("Model:"), llmModelField],
-            [rightLabel("Claude Code Suffix:"), suffixScroll],
+            [rightLabel("Reply Suffix:"), suffixScroll],
         ])
         llmGrid.column(at: 0).xPlacement = .trailing
         llmGrid.row(at: 4).yPlacement = .top  // Suffix is now row 4 (Mode toggles inserted at 0)
@@ -258,7 +290,10 @@ final class SettingsWindow: NSPanel {
         let sep1 = NSBox(); sep1.boxType = .separator; sep1.translatesAutoresizingMaskIntoConstraints = false
         let sep2 = NSBox(); sep2.boxType = .separator; sep2.translatesAutoresizingMaskIntoConstraints = false
 
-        for sub in [asrHeader, asrGrid, asrButtonRow,
+        let sep0 = NSBox(); sep0.boxType = .separator; sep0.translatesAutoresizingMaskIntoConstraints = false
+
+        for sub in [shortcutsHeader, shortcutsGrid, sep0,
+                    asrHeader, asrGrid, asrButtonRow,
                     sep1, serverHeader, serverGrid, serverButtonRow,
                     sep2, llmHeader, llmGrid, llmButtonRow, bottomRow] {
             sub.translatesAutoresizingMaskIntoConstraints = false
@@ -266,8 +301,19 @@ final class SettingsWindow: NSPanel {
         }
 
         NSLayoutConstraint.activate([
-            // 46 = 28 (titlebar height under .fullSizeContentView) + 18 (visual padding).
-            asrHeader.topAnchor.constraint(equalTo: cv.topAnchor, constant: 46),
+            shortcutsHeader.topAnchor.constraint(equalTo: cv.topAnchor, constant: 20),
+            shortcutsHeader.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+
+            shortcutsGrid.topAnchor.constraint(equalTo: shortcutsHeader.bottomAnchor, constant: 10),
+            shortcutsGrid.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            shortcutsGrid.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
+
+            sep0.topAnchor.constraint(equalTo: shortcutsGrid.bottomAnchor, constant: 18),
+            sep0.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
+            sep0.trailingAnchor.constraint(equalTo: cv.trailingAnchor, constant: -20),
+            sep0.heightAnchor.constraint(equalToConstant: 1),
+
+            asrHeader.topAnchor.constraint(equalTo: sep0.bottomAnchor, constant: 14),
             asrHeader.leadingAnchor.constraint(equalTo: cv.leadingAnchor, constant: 20),
 
             asrGrid.topAnchor.constraint(equalTo: asrHeader.bottomAnchor, constant: 10),
@@ -370,6 +416,9 @@ final class SettingsWindow: NSPanel {
 
     private func loadSettings() {
         let asr = ASRClient.shared
+        primaryShortcutPopup.selectItem(withTitle: ShortcutBinding.loadPrimary().title)
+        secondaryShortcutPopup.selectItem(withTitle: ShortcutBinding.loadSecondary().title)
+
         asrBaseField.stringValue = asr.baseURL
         asrLanguagePopup.selectItem(withTitle: asr.language)
         asrLocalePopup.selectItem(withTitle: asr.outputLocale)
@@ -575,6 +624,14 @@ final class SettingsWindow: NSPanel {
     }
 
     private func applyFields() {
+        let primary = ShortcutBinding.Preset.allCases.first {
+            $0.title == primaryShortcutPopup.titleOfSelectedItem
+        } ?? .function
+        let secondary = ShortcutBinding.Preset.allCases.first {
+            $0.title == secondaryShortcutPopup.titleOfSelectedItem
+        } ?? .disabled
+        ShortcutBinding.save(primary: primary, secondary: secondary)
+
         let asr = ASRClient.shared
         asr.baseURL = asrBaseField.stringValue
         asr.language = asrLanguagePopup.titleOfSelectedItem ?? "auto"
@@ -585,8 +642,9 @@ final class SettingsWindow: NSPanel {
         applyServerFields()
 
         let llm = LLMRefiner.shared
-        llm.isEnabled = (llmEnabledCheckbox.state == .on)
-        llm.claudeCodeModeEnabled = (translateCheckbox.state == .on)
+        let englishModeEnabled = (translateCheckbox.state == .on)
+        llm.isEnabled = englishModeEnabled || (llmEnabledCheckbox.state == .on)
+        llm.claudeCodeModeEnabled = englishModeEnabled
         llm.apiBaseURL = llmBaseField.stringValue
         llm.apiKey = llmKeyField.stringValue
         llm.model = llmModelField.stringValue

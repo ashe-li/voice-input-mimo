@@ -8,6 +8,11 @@ let package = Package(
         .executableTarget(
             name: "VoiceInputMimo",
             path: "Sources/VoiceInputMimo"
+        ),
+        .testTarget(
+            name: "VoiceInputMimoTests",
+            dependencies: ["VoiceInputMimo"],
+            path: "Tests/VoiceInputMimoTests"
         )
     ]
 )

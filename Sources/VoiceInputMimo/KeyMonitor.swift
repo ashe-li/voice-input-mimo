@@ -7,10 +7,18 @@ final class KeyMonitor {
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var fnPressed = false
+    private var activeKeyCode: Int64?
 
     /// Start monitoring. Returns false if accessibility permission is missing.
     func start() -> Bool {
-        let mask = CGEventMask(1 << CGEventType.flagsChanged.rawValue)
+        if eventTap != nil {
+            return true
+        }
+        let mask = CGEventMask(
+            (1 << CGEventType.flagsChanged.rawValue)
+                | (1 << CGEventType.keyDown.rawValue)
+                | (1 << CGEventType.keyUp.rawValue)
+        )
         let refcon = Unmanaged.passUnretained(self).toOpaque()
 
         guard let tap = CGEvent.tapCreate(
@@ -47,6 +55,8 @@ final class KeyMonitor {
         }
         runLoopSource = nil
         eventTap = nil
+        fnPressed = false
+        activeKeyCode = nil
     }
 
     // MARK: - Private
@@ -62,20 +72,37 @@ final class KeyMonitor {
             return Unmanaged.passUnretained(event)
         }
 
-        let flags = event.flags
-        let fnDown = flags.contains(.maskSecondaryFn)
-        // Diagnostic: log every flagsChanged event so we know the tap is firing
-        NSLog("[KeyMonitor] flagsChanged: fnDown=%@ raw=0x%llx",
-              fnDown ? "YES" : "no", flags.rawValue)
+        let shortcuts = ShortcutBinding.loadAll()
 
-        if fnDown && !fnPressed {
-            fnPressed = true
-            DispatchQueue.main.async { [weak self] in self?.onFnDown?() }
-            return nil // suppress Fn press (prevents emoji picker)
-        } else if !fnDown && fnPressed {
-            fnPressed = false
-            DispatchQueue.main.async { [weak self] in self?.onFnUp?() }
-            return nil // suppress Fn release
+        if type == .flagsChanged, shortcuts.contains(where: { $0.preset == .function }) {
+            let flags = event.flags
+            let fnDown = flags.contains(.maskSecondaryFn)
+            if fnDown && !fnPressed {
+                fnPressed = true
+                DispatchQueue.main.async { [weak self] in self?.onFnDown?() }
+                return nil
+            } else if !fnDown && fnPressed {
+                fnPressed = false
+                DispatchQueue.main.async { [weak self] in self?.onFnUp?() }
+                return nil
+            }
+        }
+
+        if type == .keyDown, activeKeyCode == nil {
+            if let shortcut = shortcuts.first(where: { $0.matchesKeyDown(event: event) }),
+               let keyCode = shortcut.preset.keyCode {
+                activeKeyCode = keyCode
+                DispatchQueue.main.async { [weak self] in self?.onFnDown?() }
+                return nil
+            }
+        }
+
+        if type == .keyUp, let keyCode = activeKeyCode {
+            if event.getIntegerValueField(.keyboardEventKeycode) == keyCode {
+                activeKeyCode = nil
+                DispatchQueue.main.async { [weak self] in self?.onFnUp?() }
+                return nil
+            }
         }
 
         return Unmanaged.passUnretained(event)

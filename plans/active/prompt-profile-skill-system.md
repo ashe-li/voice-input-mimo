@@ -481,6 +481,13 @@ v2：per-app override、iCloud sync、skill marketplace（gist import）
   → 測試：所有 unit tests 綠 + bench harness 改寫後 6/6 不退步
 
 **Phase 2：UI 共用元件**
+
+> **Phase 2 開工前必做**：ECC plugin 的 4 個 Swift skill 預設 deferred（`swiftui-patterns` / `swift-concurrency-6-2` / `swift-protocol-di-testing` / `swift-actor-persistence`），ECC 也沒有 `swift-reviewer` / `swift-build-resolver` agent。Phase 2-6 寫 Swift UI code 前，agent 須以 `ToolSearch` 主動載入相關 skill：
+> - 寫 SwiftUI/AppKit view → `ToolSearch query="swiftui patterns"`
+> - 用 async/await / `@MainActor` → `ToolSearch query="swift concurrency"`
+> - DI / testable component → `ToolSearch query="swift protocol di testing"`
+> - Code review 走 generic `code-reviewer` agent，但 prompt 內必須點名 Swift idioms 檢查項（optional unwrap、`@MainActor` 邊界、`Sendable`、retain cycle）
+
   7. UI/ 五個共用 component（VibrantWindow / SectionHeading / RoundedCard / SidebarList / IconButton）
   → 為後續 Pane 提供 building blocks
 

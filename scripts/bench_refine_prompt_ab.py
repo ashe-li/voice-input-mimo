@@ -43,6 +43,46 @@ What NOT to do:
 If the input appears correct, return it exactly as-is. Return ONLY the text, nothing else.
 """
 
+_V1_STORE_BASE = """/no_think You clean up a noisy Chinese ASR transcript.
+
+Examples
+Input: 嗯，打字真的蠻慢的，所以如果以後大家都假假定啊，大家都用語音輸入的話。
+Output: 打字真的蠻慢的，所以如果以後大家都假定，大家都用語音輸入的話。
+
+Input: 那目前大多數問問題會是語語音輸入的準確度。
+Output: 那目前大多數問題會是語音輸入的準確度。
+
+Input: 呃，創作者或或者使用者還可以決定我要不要用，比如說我們的，呃，skill。
+Output: 創作者或者使用者還可以決定我要不要用，比如說我們的 skill。
+
+Input: 呃，我的問題是，我遇到一個 bug。
+Output: 我的問題是，我遇到一個 bug。
+
+Input: 嗯，這個版本應該可以 work。
+Output: 這個版本應該可以 work。
+
+If the input already reads cleanly, return it exactly as-is. Output ONLY the cleaned text — no preamble, no quotes, no explanations."""
+
+# Mirrors Sources/VoiceInputMimo/Prompts/BuiltinPromptCatalog.swift Default Refine
+# profile: basePrompt above + these 5 skill snippets appended in order with "\n\n"
+# separators (matches PromptComposer.render). Source of truth is the Swift
+# catalog; if catalog content changes, update both.
+_V1_STORE_SKILLS = [
+    # builtin-output-same-language
+    "Output the SAME LANGUAGE as input — never translate to English. Mixed Chinese/English must stay mixed.",
+    # builtin-drop-fillers
+    "Always drop verbal fillers when they carry no meaning: 嗯, 呃, 啊, 欸, 那個, 就是說.",
+    # builtin-collapse-stutter
+    "Always collapse immediate stutter or repetition: 假假定→假定, 或或者→或者, 問問題→問題, 語語音→語音, 需要需要→需要.",
+    # builtin-recover-en-cn-homophones
+    "Restore English words misheard as Chinese: 配森→Python, 杰森→JSON, 阿皮愛→API, 瑞克特→React, 康波奈特→component, 肉特→route. Also fix obvious Chinese homophone errors when context makes the correct character clear, and fix English/Chinese mix split incorrectly by the recognizer. Stuttered acronyms also collapse: L M K→LLM, A P I→API, J S→JS.",
+    # builtin-no-rephrase
+    'Never rephrase, rewrite, or "improve" the wording. Never substitute synonyms. Never add or remove content words (nouns, verbs, adjectives). Never change tone or register (casual stays casual). Never alter punctuation unless clearly wrong. Never collapse meaningful repetitions used for emphasis (e.g. "很多很多").',
+]
+
+PROMPT_V1_STORE = "\n\n".join([_V1_STORE_BASE.strip()] + _V1_STORE_SKILLS)
+
+
 PROMPT_V1 = """/no_think You clean up a noisy Chinese ASR transcript. Output the SAME LANGUAGE as input — never translate to English. Mixed Chinese/English must stay mixed.
 
 Always fix:
@@ -165,6 +205,7 @@ def main() -> int:
     for case in TEST_CASES:
         out_v0, t_v0 = call_llm(args.base_url, args.model, PROMPT_V0, case["asr"], args.timeout)
         out_v1, t_v1 = call_llm(args.base_url, args.model, PROMPT_V1, case["asr"], args.timeout)
+        out_v1s, t_v1s = call_llm(args.base_url, args.model, PROMPT_V1_STORE, case["asr"], args.timeout)
         rows.append(
             {
                 **case,
@@ -176,24 +217,40 @@ def main() -> int:
                 "v1_ms": int(t_v1 * 1000),
                 "v1_changed": out_v1 != case["asr"],
                 "v1_delta_chars": len(out_v1) - len(case["asr"]),
+                "v1s_out": out_v1s,
+                "v1s_ms": int(t_v1s * 1000),
+                "v1s_changed": out_v1s != case["asr"],
+                "v1s_delta_chars": len(out_v1s) - len(case["asr"]),
             }
         )
 
-    print(f"\n# Refine prompt A/B backtest — {args.model}\n")
+    print(f"\n# Refine prompt A/B/C backtest — {args.model}\n")
     print(f"Endpoint: `{args.base_url}`  ·  Cases: {len(rows)}\n")
+    print(
+        "Variants:\n"
+        "- **v0**: legacy conservative prompt (pre-v1)\n"
+        "- **v1**: hardcoded v1.1 prompt currently in `LLMRefiner.defaultRefinePrompt`\n"
+        "- **v1-store**: builtin Default Refine profile rendered via `PromptComposer.render` "
+        "(basePrompt + 5 skills appended) — Phase 1 acceptance gate\n"
+    )
 
     print("## Summary\n")
     v0_changed = sum(1 for r in rows if r["v0_changed"])
     v1_changed = sum(1 for r in rows if r["v1_changed"])
+    v1s_changed = sum(1 for r in rows if r["v1s_changed"])
     v0_avg_ms = sum(r["v0_ms"] for r in rows) / len(rows) if rows else 0
     v1_avg_ms = sum(r["v1_ms"] for r in rows) / len(rows) if rows else 0
+    v1s_avg_ms = sum(r["v1s_ms"] for r in rows) / len(rows) if rows else 0
     v0_total_delta = sum(r["v0_delta_chars"] for r in rows)
     v1_total_delta = sum(r["v1_delta_chars"] for r in rows)
-    print("| Metric | v0 (current) | v1 (new) |")
-    print("|---|---|---|")
-    print(f"| Cases changed | {v0_changed}/{len(rows)} | {v1_changed}/{len(rows)} |")
-    print(f"| Avg latency | {v0_avg_ms:.0f} ms | {v1_avg_ms:.0f} ms |")
-    print(f"| Total Δchars | {v0_total_delta:+d} | {v1_total_delta:+d} |")
+    v1s_total_delta = sum(r["v1s_delta_chars"] for r in rows)
+    print("| Metric | v0 (legacy) | v1 (hardcoded) | v1-store (composed) |")
+    print("|---|---|---|---|")
+    print(f"| Cases changed | {v0_changed}/{len(rows)} | {v1_changed}/{len(rows)} | {v1s_changed}/{len(rows)} |")
+    print(f"| Avg latency | {v0_avg_ms:.0f} ms | {v1_avg_ms:.0f} ms | {v1s_avg_ms:.0f} ms |")
+    print(f"| Total Δchars | {v0_total_delta:+d} | {v1_total_delta:+d} | {v1s_total_delta:+d} |")
+    print()
+    print(f"**Acceptance**: v1-store changed = {v1s_changed}/{len(rows)} (must equal {v1_changed}/{len(rows)} v1 baseline).")
     print()
 
     print("## Per-case comparison\n")
@@ -202,8 +259,10 @@ def main() -> int:
         print(f"**ASR ({len(r['asr'])} chars)**: {r['asr']}\n")
         v0_tag = "🟰 unchanged" if not r["v0_changed"] else f"✏️ {r['v0_delta_chars']:+d}"
         v1_tag = "🟰 unchanged" if not r["v1_changed"] else f"✏️ {r['v1_delta_chars']:+d}"
+        v1s_tag = "🟰 unchanged" if not r["v1s_changed"] else f"✏️ {r['v1s_delta_chars']:+d}"
         print(f"**v0 ({r['v0_ms']} ms, {v0_tag})**: {r['v0_out']}\n")
         print(f"**v1 ({r['v1_ms']} ms, {v1_tag})**: {r['v1_out']}\n")
+        print(f"**v1-store ({r['v1s_ms']} ms, {v1s_tag})**: {r['v1s_out']}\n")
         print()
 
     if args.out_md:
@@ -212,20 +271,21 @@ def main() -> int:
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             # Reuse render — re-run prints
-            print(f"# Refine prompt A/B backtest — {args.model}\n")
+            print(f"# Refine prompt A/B/C backtest — {args.model}\n")
             print(f"Endpoint: `{args.base_url}`  ·  Cases: {len(rows)}\n")
             print("## Summary\n")
-            print("| Metric | v0 | v1 |")
-            print("|---|---|---|")
-            print(f"| Cases changed | {v0_changed}/{len(rows)} | {v1_changed}/{len(rows)} |")
-            print(f"| Avg latency | {v0_avg_ms:.0f} ms | {v1_avg_ms:.0f} ms |")
-            print(f"| Total Δchars | {v0_total_delta:+d} | {v1_total_delta:+d} |\n")
+            print("| Metric | v0 | v1 | v1-store |")
+            print("|---|---|---|---|")
+            print(f"| Cases changed | {v0_changed}/{len(rows)} | {v1_changed}/{len(rows)} | {v1s_changed}/{len(rows)} |")
+            print(f"| Avg latency | {v0_avg_ms:.0f} ms | {v1_avg_ms:.0f} ms | {v1s_avg_ms:.0f} ms |")
+            print(f"| Total Δchars | {v0_total_delta:+d} | {v1_total_delta:+d} | {v1s_total_delta:+d} |\n")
             print("## Per-case comparison\n")
             for r in rows:
                 print(f"### {r['id']} — {r['label']}\n")
                 print(f"**ASR**: {r['asr']}\n")
                 print(f"**v0**: {r['v0_out']}\n")
                 print(f"**v1**: {r['v1_out']}\n")
+                print(f"**v1-store**: {r['v1s_out']}\n")
         from pathlib import Path
         Path(args.out_md).write_text(buf.getvalue(), encoding="utf-8")
         print(f"Wrote markdown to: {args.out_md}", file=sys.stderr)

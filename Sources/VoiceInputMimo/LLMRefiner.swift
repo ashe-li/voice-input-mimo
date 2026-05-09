@@ -150,7 +150,12 @@ final class LLMRefiner {
         }
 
         let resolvedMode = mode ?? (claudeCodeModeEnabled ? .claudeCode : .refine)
-        let systemPrompt = (resolvedMode == .claudeCode) ? claudeCodeSystemPrompt : refineSystemPrompt
+        let activeProfile = (try? PromptStore.shared.activeProfile(for: resolvedMode)) ?? nil
+        let systemPrompt = Self.resolveSystemPrompt(
+            for: resolvedMode,
+            store: PromptStore.shared,
+            userDefaults: .standard
+        )
 
         guard let url = URL(string: "\(normalizedBaseURL())/chat/completions") else {
             completion(.failure(RefinerError.invalidURL))
@@ -166,23 +171,31 @@ final class LLMRefiner {
         }
         request.timeoutInterval = 90  // Qwen3 reasoning models can take 30s+ per inference
 
+        let resolvedModel = activeProfile?.modelOverride ?? model
+        let resolvedTemp = activeProfile?.temperature ?? (resolvedMode == .claudeCode ? 0.2 : 0.3)
+
         let body: [String: Any] = [
-            "model": model,
+            "model": resolvedModel,
             "messages": [
                 ["role": "system", "content": systemPrompt],
                 ["role": "user", "content": text],
             ],
-            "temperature": resolvedMode == .claudeCode ? 0.2 : 0.3,
+            "temperature": resolvedTemp,
             // Qwen3 reasoning models burn ~250 tokens on internal thinking before
             // producing the actual answer. 600 leaves room for ~350 tokens of answer.
             "max_tokens": 600,
         ]
 
         let logTag = requestId.isEmpty ? "" : "[req=\(requestId)] "
-        logger.debug("\(logTag)Request: \(url.absoluteString) model=\(self.model) mode=\(resolvedMode.rawValue)")
+        logger.debug("\(logTag)Request: \(url.absoluteString) model=\(resolvedModel) mode=\(resolvedMode.rawValue) profile=\(activeProfile?.id ?? "<none>")")
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
 
-        let suffixToAppend = (resolvedMode == .claudeCode) ? claudeCodeSuffix : ""
+        let suffixToAppend: String
+        if resolvedMode == .claudeCode {
+            suffixToAppend = activeProfile?.suffix ?? claudeCodeSuffix
+        } else {
+            suffixToAppend = ""
+        }
 
         currentTask = URLSession.shared.dataTask(with: request) { data, _, error in
             if let error {
@@ -226,6 +239,28 @@ final class LLMRefiner {
     func cancel() {
         currentTask?.cancel()
         currentTask = nil
+    }
+
+    // MARK: - System prompt resolution
+
+    /// Resolve the system prompt with three-tier fallback:
+    /// 1. PromptStore active profile rendered via PromptComposer (preferred)
+    /// 2. UserDefaults legacy override (`refineSystemPrompt` / `claudeCodeSystemPrompt`)
+    /// 3. Hardcoded compile-time default
+    static func resolveSystemPrompt(
+        for mode: RefineMode,
+        store: PromptStore,
+        userDefaults: UserDefaults
+    ) -> String {
+        if let profile = try? store.activeProfile(for: mode) {
+            let skills = (try? store.listSkills()) ?? []
+            return PromptComposer.render(profile: profile, skills: skills)
+        }
+        let key = mode == .claudeCode ? "claudeCodeSystemPrompt" : "refineSystemPrompt"
+        if let custom = userDefaults.string(forKey: key), !custom.isEmpty {
+            return custom
+        }
+        return mode == .claudeCode ? Self.defaultClaudeCodePrompt : Self.defaultRefinePrompt
     }
 
     // MARK: - Private helpers

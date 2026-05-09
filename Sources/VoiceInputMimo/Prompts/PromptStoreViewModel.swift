@@ -60,4 +60,81 @@ final class PromptStoreViewModel {
     func clearError() {
         lastError = nil
     }
+
+    // MARK: - Mutations (Phase 4 — Prompts pane)
+
+    /// Persist `profile` and refresh the in-memory list for its mode. Used by
+    /// the ProfileEditor save action and by the duplicate-profile flow.
+    func saveProfile(_ profile: PromptProfile) {
+        do {
+            try store.saveProfile(profile)
+            profilesByMode[profile.mode] = try store.listProfiles(mode: profile.mode)
+            lastError = nil
+        } catch {
+            lastError = error
+        }
+    }
+
+    /// Remove a profile from disk + the in-memory list. Builtin profiles are
+    /// guarded by the store; the resulting `cannotDeleteBuiltin` error
+    /// surfaces via `lastError` for the view to render.
+    func deleteProfile(id: String, mode: RefineMode) {
+        do {
+            try store.deleteProfile(id: id, mode: mode)
+            profilesByMode[mode] = try store.listProfiles(mode: mode)
+            lastError = nil
+        } catch {
+            lastError = error
+        }
+    }
+
+    /// Persist `skill` and refresh the in-memory list. Used by SkillsLibrary
+    /// (Phase 4B) plus by import/duplicate flows.
+    func saveSkill(_ skill: PromptSkill) {
+        do {
+            try store.saveSkill(skill)
+            skills = try store.listSkills()
+            lastError = nil
+        } catch {
+            lastError = error
+        }
+    }
+
+    /// Remove a skill from disk. Profiles that reference it lose the link
+    /// silently — PromptComposer skips unknown skill IDs at render time.
+    func deleteSkill(id: String) {
+        do {
+            try store.deleteSkill(id: id)
+            skills = try store.listSkills()
+            lastError = nil
+        } catch {
+            lastError = error
+        }
+    }
+
+    /// Mark a profile as active for the given mode. Persisted to
+    /// `active.json` so the next launch picks it up via PromptMigration.
+    func setActiveProfile(id: String, mode: RefineMode) {
+        let current = activeSelection ?? ActiveSelection(refineProfileID: "", claudeCodeProfileID: "")
+        let updated: ActiveSelection
+        switch mode {
+        case .refine:
+            updated = ActiveSelection(refineProfileID: id, claudeCodeProfileID: current.claudeCodeProfileID)
+        case .claudeCode:
+            updated = ActiveSelection(refineProfileID: current.refineProfileID, claudeCodeProfileID: id)
+        }
+        do {
+            try store.saveActiveSelection(updated)
+            activeSelection = updated
+            lastError = nil
+        } catch {
+            lastError = error
+        }
+    }
+
+    /// Look up a skill by id — used by ProfileEditor to render the linked
+    /// skill chips inline with the profile form.
+    func skill(id: String) -> PromptSkill? {
+        skills.first { $0.id == id }
+    }
 }

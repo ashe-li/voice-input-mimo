@@ -1,31 +1,37 @@
 import SwiftUI
 
-/// Phase 3 placeholder. Phase 4 fills this with the three-column
-/// `NavigationSplitView` (ProfileSidebar / ProfileEditor / PromptTestPanel)
-/// + Skills Library tab. Showing a placeholder now means the sidebar entry
-/// is wired and discoverable; users see what's coming without partial UI.
+/// Phase 4 Prompts pane — 3-column editor (HSplitView) for browsing,
+/// editing, and live-testing prompt profiles. Uses the Phase 2
+/// PromptStoreViewModel singleton plus a pane-local @Observable
+/// PromptsPaneViewModel for transient draft / test state.
 struct PromptsPane: View {
+    @Environment(PromptStoreViewModel.self) private var store
+    @State private var pane = PromptsPaneViewModel()
+
     var body: some View {
-        VStack(spacing: 12) {
-            Image(systemName: "text.append")
-                .font(.system(size: 40, weight: .light))
-                .foregroundStyle(.secondary)
-            SectionHeading("Prompts", subtitle: "Profile editor + Skills library — Phase 4")
-            Text("Voice-input prompts will be customizable here. Build, share, and switch profiles for different speech acts (refine / claudeCode) without touching code.")
-                .font(.callout)
-                .foregroundStyle(.secondary)
-                .multilineTextAlignment(.center)
-                .frame(maxWidth: 420)
+        HSplitView {
+            ProfileSidebar()
+                .frame(minWidth: 220, idealWidth: 240, maxWidth: 320)
+
+            ProfileEditor()
+                .frame(minWidth: 360, idealWidth: 460)
+
+            PromptTestPanel()
+                .frame(minWidth: 320, idealWidth: 380)
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .padding(40)
+        .environment(pane)
         .navigationTitle("Prompts")
+        .task {
+            await store.reload()
+            pane.ensureSelection(from: store)
+        }
     }
 }
 
 #if DEBUG
 #Preview("PromptsPane") {
     PromptsPane()
-        .frame(width: 640, height: 480)
+        .environment(PromptStoreViewModel())
+        .frame(width: 1080, height: 600)
 }
 #endif

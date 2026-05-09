@@ -2,7 +2,7 @@ APP_NAME := VoiceInputMimo
 APP_BUNDLE := $(APP_NAME).app
 BUILD_DIR := $(shell swift build -c release --show-bin-path 2>/dev/null || echo .build/release)
 
-.PHONY: build clean install run server-start server-stop e2e-phase1 e2e-phase2 e2e-phase3
+.PHONY: build clean install run server-start server-stop e2e-phase1 e2e-phase2 e2e-phase3 e2e-phase4
 
 build:
 	swift build -c release
@@ -50,3 +50,6 @@ e2e-phase2:
 
 e2e-phase3:
 	@bash scripts/e2e/phase3_gate.sh
+
+e2e-phase4:
+	@bash scripts/e2e/phase4_gate.sh

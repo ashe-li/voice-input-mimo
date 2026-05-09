@@ -149,7 +149,7 @@ final class SettingsWindow: NSPanel {
         if #available(macOS 14, *) { asrProbeButton.bezelColor = .controlAccentColor }
 
         // LLM section
-        llmBaseField.placeholderString = "http://localhost:1234/v1"
+        llmBaseField.placeholderString = "http://127.0.0.1:8082/v1"
         llmKeyField.placeholderString = "local-api-key"
         llmModelField.placeholderString = "model-id"
 

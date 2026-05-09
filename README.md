@@ -1,6 +1,6 @@
 # voice-input-mimo
 
-獨立分支 — 改用 **MiMo-V2.5-ASR**（Xiaomi 開源、原生支援中英 code-switching）取代 Apple Speech 做語音辨識，搭配本地 LLM（Rapid-MLX / LM Studio）做後處理。
+獨立分支 — 改用 **MiMo-V2.5-ASR**（Xiaomi 開源、原生支援中英 code-switching）取代 Apple Speech 做語音辨識，搭配本地 LLM（**Rapid-MLX** 為主、LM Studio / ollama 等 OpenAI 相容後端皆可）做後處理。預設 LLM endpoint：`http://127.0.0.1:8082/v1`（Rapid-MLX）。
 
 > **狀態**：Phase A（ASR server）+ Phase B（Swift app）+ Phase 2（adaptive idle ladder + Qwen cache manager + structured logging）皆已落地。
 > - 舊 `server/server.py` 仍在 repo（fixed idle）作為 baseline reference
@@ -137,7 +137,7 @@ MIMO_PRELOAD=1 ./run.sh
 
 **輔助 window**
 - `ClipboardHistoryWindow.swift` + `ClipboardArchive.swift`：每次完成 dictation 即透過 `saveSession(zh:english:)` 保留 ASR 原文 + 輸出，標記為 `EntryKind.session`；舊 clipboard snapshot 仍以 `EntryKind.clipboard` 存
-- `ModelMemoryWindow.swift` + `ModelMemoryMonitor.swift`：每 5s 輪詢 engine `/admin/memory` 與 LM Studio `/v1/status`，顯示 Speech / LLM 模型 RSS / metal active / cache
+- `ModelMemoryWindow.swift` + `ModelMemoryMonitor.swift`：每 5s 輪詢 engine `/admin/memory` 與 LLM 後端（Rapid-MLX）`/v1/status`，顯示 Speech / LLM 模型 RSS / metal active / cache
 
 **開發 / 預覽**
 - `VOICE_INPUT_MIMO_PREVIEW=1`：regular activation policy、自動開 Clipboard History + Model Memory 並注入 sample archive、跳過 LocalASRServer 啟動與終止 — bypass install + 重簽 + TCC re-grant tax

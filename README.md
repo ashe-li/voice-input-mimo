@@ -124,7 +124,13 @@ MIMO_PRELOAD=1 ./run.sh
 **Pipeline 主鏈**
 - `AudioRecorder.swift`：AVAudioEngine 錄 16 kHz mono PCM wav
 - `ASRClient.swift`：multipart POST → `/v1/audio/transcriptions`，X-Request-Id 自動 forward；`/admin/memory` 走 8s timeout（cold path 可超過 default 2s）
-- `LLMRefiner.swift`：英譯 / 繁中 cleanup / claudeCode mode（含 zh-TW suffix 注入）
+- `LLMRefiner.swift`：英譯 / 繁中 cleanup / claudeCode mode（含 zh-TW suffix 注入）；system prompt 走 PromptStore → UserDefaults → hardcoded 三層 fallback
+- `Prompts/`：Prompt Profile + Skill 客製化系統（branch `feat/prompt-profile-skill-system`，Phase 1 logic foundation 完成、UI 進行中）
+  - `PromptProfile.swift`：Profile / Skill / SkillCategory / ActiveSelection 資料模型
+  - `PromptStore.swift`：JSON CRUD（`~/Library/Application Support/VoiceInputMimo/prompts/`）+ atomic write
+  - `PromptComposer.swift`：append-mode rendering（v1.5 加 slot 模板）+ token estimate
+  - `BuiltinPromptCatalog.swift`：8 builtin skills + 2 default profiles
+  - `PromptMigration.swift`：first-launch bootstrap + 既有 UserDefaults override import
 - `LocalASRServer.swift`：supervise local engine（adopt 既有 / 自己 spawn），預設 module path = `engine.server:app`
 - `TextInjector.swift` / `RecordingArchive.swift`：貼上 + 錄音歸檔
 
@@ -148,10 +154,13 @@ bundle id `com.shiun.VoiceInputMimo` 跟 Apple Speech 版（`voice-input-src`）
 ## Tests
 
 ```bash
-swift test
+swift test            # 全部 unit test（91 個）
+make e2e-phase1       # Phase 1 E2E acceptance gate（需 Rapid-MLX 8082 在跑）
 ```
 
-`Tests/VoiceInputMimoTests/` 涵蓋 ShortcutBinding / ModelMemoryParser / ClipboardArchive 三組 unit tests。
+`Tests/VoiceInputMimoTests/` 涵蓋 ShortcutBinding / ModelMemoryParser / ClipboardArchive + Prompt subsystem 6 組（PromptProfile / PromptStore / PromptComposer / BuiltinPromptCatalog / PromptMigration / LLMRefinerPromptResolution）。
+
+**E2E gate per phase**（branch `feat/prompt-profile-skill-system`）：每個 phase 收尾跑 `scripts/e2e/phaseN_gate.sh` pass 才能進下個 phase。SwiftPM menubar app 沒 Xcode 專案 → 採 C+A 混合（side-effect 驗證 + osascript driver），D（截圖 diff）留 Phase 6 hero flow。Phase 1 gate = `swift test` + `bench_refine_prompt_ab.py --gate`（v1-store hit ≥ v1 baseline）。詳見 `plans/active/prompt-profile-skill-system.md`「E2E Gate per Phase」段。
 
 ## License
 

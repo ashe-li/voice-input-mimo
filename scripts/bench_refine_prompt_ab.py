@@ -199,6 +199,11 @@ def main() -> int:
     p.add_argument("--model", default="qwen3-8b-mlx")
     p.add_argument("--timeout", type=float, default=120.0)
     p.add_argument("--out-md", default=None, help="Write markdown report to this path")
+    p.add_argument(
+        "--gate",
+        action="store_true",
+        help="Exit non-zero if v1-store hit count < v1 hit count (Phase 1 E2E acceptance gate)",
+    )
     args = p.parse_args()
 
     rows: list[dict] = []
@@ -250,7 +255,7 @@ def main() -> int:
     print(f"| Avg latency | {v0_avg_ms:.0f} ms | {v1_avg_ms:.0f} ms | {v1s_avg_ms:.0f} ms |")
     print(f"| Total Δchars | {v0_total_delta:+d} | {v1_total_delta:+d} | {v1s_total_delta:+d} |")
     print()
-    print(f"**Acceptance**: v1-store changed = {v1s_changed}/{len(rows)} (must equal {v1_changed}/{len(rows)} v1 baseline).")
+    print(f"**Acceptance**: v1-store changed = {v1s_changed}/{len(rows)} (must be >= {v1_changed}/{len(rows)} v1 baseline).")
     print()
 
     print("## Per-case comparison\n")
@@ -290,6 +295,17 @@ def main() -> int:
         Path(args.out_md).write_text(buf.getvalue(), encoding="utf-8")
         print(f"Wrote markdown to: {args.out_md}", file=sys.stderr)
 
+    if args.gate:
+        if v1s_changed < v1_changed:
+            print(
+                f"\n❌ GATE FAIL: v1-store {v1s_changed}/{len(rows)} < v1 {v1_changed}/{len(rows)}",
+                file=sys.stderr,
+            )
+            return 1
+        print(
+            f"\n✅ GATE PASS: v1-store {v1s_changed}/{len(rows)} >= v1 {v1_changed}/{len(rows)}",
+            file=sys.stderr,
+        )
     return 0
 
 

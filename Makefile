@@ -2,7 +2,7 @@ APP_NAME := VoiceInputMimo
 APP_BUNDLE := $(APP_NAME).app
 BUILD_DIR := $(shell swift build -c release --show-bin-path 2>/dev/null || echo .build/release)
 
-.PHONY: build clean install run server-start server-stop
+.PHONY: build clean install run server-start server-stop e2e-phase1
 
 build:
 	swift build -c release
@@ -35,3 +35,10 @@ server-start:
 
 server-stop:
 	@pkill -f 'uvicorn server:app' && echo "✅ Server stopped" || echo "ℹ️ Server not running"
+
+# Phase E2E acceptance gates. Each phase must pass its gate before moving on.
+# Phase 1 = data layer + LLMRefiner integration (current).
+# Phase 2-6 gates will be added as those phases are implemented.
+
+e2e-phase1:
+	@bash scripts/e2e/phase1_gate.sh

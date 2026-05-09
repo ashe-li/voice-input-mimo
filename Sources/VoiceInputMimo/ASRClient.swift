@@ -135,16 +135,20 @@ final class ASRClient {
     /// GET /admin/memory → JSON dict（含 asr.idle.level / current_window / time_since_use_s）.
     /// Uses cached snapshot — Phase 2 engine returns instantly without vmmap subprocess tax.
     func adminMemory(completion: @escaping (Result<[String: Any], Error>) -> Void) {
-        getJSON(path: "/admin/memory", completion: completion)
+        getJSON(path: "/admin/memory", timeout: 8, completion: completion)
     }
 
-    private func getJSON(path: String, completion: @escaping (Result<[String: Any], Error>) -> Void) {
+    private func getJSON(
+        path: String,
+        timeout: TimeInterval = 2,
+        completion: @escaping (Result<[String: Any], Error>) -> Void
+    ) {
         let trimmed = baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL
         guard let url = URL(string: "\(trimmed)\(path)") else {
             completion(.failure(ASRError.invalidURL)); return
         }
         var req = URLRequest(url: url)
-        req.timeoutInterval = 2
+        req.timeoutInterval = timeout
         URLSession.shared.dataTask(with: req) { data, _, error in
             if let error {
                 DispatchQueue.main.async { completion(.failure(error)) }; return

@@ -2,6 +2,15 @@ import AppKit
 import QuartzCore
 
 final class OverlayPanel: NSPanel {
+    enum Phase {
+        case recording(elapsed: Double)
+        case transcribing(elapsed: Double)
+        case zhReady(zh: String)
+        case refining(zh: String, elapsed: Double)
+        case bothReady(zh: String, en: String)
+        case error(String)
+    }
+
     private let label = NSTextField(labelWithString: "")
     private let waveformView = WaveformView()
 
@@ -94,6 +103,29 @@ final class OverlayPanel: NSPanel {
 
     // MARK: - Public
 
+    func transition(to phase: Phase) {
+        switch phase {
+        case .recording(let elapsed):
+            present("Listening \(Self.formatElapsed(elapsed))", animating: true)
+        case .transcribing(let elapsed):
+            present("Transcribing \(Self.formatElapsed(elapsed))", animating: true)
+        case .zhReady(let zh):
+            present("Chinese ready: \(Self.preview(zh))", animating: false)
+        case .refining(_, let elapsed):
+            present("Converting to English \(Self.formatElapsed(elapsed))", animating: true)
+        case .bothReady(let zh, let en):
+            present("Ready: \(Self.preview(en.isEmpty ? zh : en))", animating: false)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+                self?.dismiss()
+            }
+        case .error(let message):
+            present("Error: \(Self.preview(message))", animating: false)
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) { [weak self] in
+                self?.dismiss()
+            }
+        }
+    }
+
     func show(text: String = "Listening...") {
         label.stringValue = text
         waveformView.isAnimating = true
@@ -168,6 +200,27 @@ final class OverlayPanel: NSPanel {
         let textW = ceil((text as NSString).size(withAttributes: attrs).width)
         let total = hPad + waveSize + gap + textW + hPad
         return min(max(total, minWidth), maxWidth)
+    }
+
+    private func present(_ text: String, animating: Bool) {
+        waveformView.isAnimating = animating
+        if isVisible {
+            updateText(text)
+        } else {
+            show(text: text)
+            waveformView.isAnimating = animating
+        }
+    }
+
+    private static func formatElapsed(_ elapsed: Double) -> String {
+        String(format: "%.1fs", elapsed)
+    }
+
+    private static func preview(_ text: String) -> String {
+        let oneLine = text
+            .replacingOccurrences(of: "\n", with: " ")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        return String(oneLine.prefix(64))
     }
 }
 

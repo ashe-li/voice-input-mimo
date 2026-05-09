@@ -5,7 +5,10 @@ enum PromptStoreError: Error, Equatable {
     case ioFailure(String)
 }
 
-final class PromptStore {
+/// `@unchecked Sendable` is sound here because every mutating operation routes
+/// through `queue.sync` (single serial dispatch queue) and all stored properties
+/// are `let` after init. Future v1.5 plan: replace with proper actor isolation.
+final class PromptStore: PromptStoreProviding, @unchecked Sendable {
     static let shared: PromptStore = PromptStore(rootDirectory: PromptStore.defaultRootDirectory())
 
     let rootDirectory: URL

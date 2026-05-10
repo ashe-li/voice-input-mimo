@@ -139,7 +139,7 @@ MIMO_PRELOAD=1 ./run.sh
   - `PromptStore.swift` + `PromptStoreProviding.swift`：JSON CRUD（`~/Library/Application Support/VoiceInputMimo/prompts/`）+ atomic write，protocol DI for testability
   - `PromptStoreViewModel.swift`：`@MainActor @Observable` adapter — Settings / status menu / overlay 共用
   - `PromptComposer.swift`：append-mode rendering（v1.5 加 slot 模板）+ token estimate
-  - `BuiltinPromptCatalog.swift`：8 builtin skills + 2 default profiles
+  - `BuiltinPromptCatalog.swift`：10 builtin skills + 3 default profiles（Default Refine / Default ClaudeCode / Polish (Chinese)）
   - `PromptMigration.swift`：first-launch bootstrap + 既有 UserDefaults override import
   - `PromptIO.swift`：JSON bundle codec（`schemaVersion` + `PromptImportPlanner` pure-fn merge with replace/rename/skip strategies）
 - `LocalASRServer.swift`：supervise local engine（adopt 既有 / 自己 spawn），預設 module path = `engine.server:app`

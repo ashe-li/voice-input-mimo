@@ -103,11 +103,45 @@ enum BuiltinPromptCatalog {
             description: "ClaudeCode mode: keep speaker's intent (request vs description vs question) intact in translation.",
             isBuiltin: true
         ),
+        PromptSkill(
+            id: "builtin-speech-act-zh",
+            name: "Speech act detection (Chinese)",
+            category: .speechAct,
+            content: """
+                Speech act detection (CRITICAL — preserve speaker's intent in Chinese output):
+                - REQUEST ("幫我X", "請X", "可以X嗎") → keep imperative form ("幫我X", "請X")
+                - DESCRIPTION/STATEMENT ("我現在X", "其實是X", "目前X") → keep declarative
+                - QUESTION ("會不會X", "為什麼X", "X嗎") → keep question form
+                Do NOT convert between forms (e.g. do not turn "幫我確認" into "請確認", and do not flatten a request into a description).
+                """,
+            description: "Polish mode: keep request / description / question register intact in cleaned Chinese output.",
+            isBuiltin: true
+        ),
+
+        // Light rewrite (polish-mode only — explicitly NOT used by Default Refine, which keeps no-rephrase lock)
+        PromptSkill(
+            id: "builtin-light-rewrite-zh",
+            name: "Light spoken-to-written rewrite (Chinese)",
+            category: .style,
+            content: """
+                Allow light spoken-to-written normalization while preserving content:
+                - Tighten redundant connectives ("即便是" → "即使", "所以如果...的話" can fold into "假定...的話").
+                - Drop conversational scaffolding that carries no content ("就是說", "比如說啊", "那個", "我會說", "那種").
+                - Reorder fragments ONLY when the spoken order yields ungrammatical written Chinese.
+                - When self-correction occurs ("我即便...其實是..."), keep the corrected form.
+                - Never substitute synonyms for content words. Never add or remove content nouns / verbs / adjectives. Never summarize, never expand.
+                - Match the speaker's register (casual stays casual, formal stays formal).
+                - Preserve code identifiers, English tech names, and proper nouns verbatim.
+                """,
+            description: "Polish mode: permits light written-form normalization while keeping content and register intact.",
+            isBuiltin: true
+        ),
     ]
 
     static let profiles: [PromptProfile] = [
         defaultRefineProfile,
         defaultClaudeCodeProfile,
+        polishZhProfile,
     ]
 
     /// Default Refine profile: keeps few-shot examples + final closing in basePrompt;
@@ -191,6 +225,57 @@ enum BuiltinPromptCatalog {
             "builtin-style-preserve-identifiers",
         ],
         displayLabel: "Translating (Default ClaudeCode)",
+        createdAt: referenceDate,
+        updatedAt: referenceDate,
+        isBuiltin: true
+    )
+
+    /// Polish profile: mirrors Default ClaudeCode philosophy (light rewriting allowed)
+    /// but outputs natural written Chinese instead of translating to English.
+    /// Differs from Default Refine: drops the `no-rephrase` lock, adds light-rewrite +
+    /// Chinese speech-act preservation. Few-shot examples drawn from real ASR captures
+    /// in `scripts/bench_refine_prompt_ab.py` TEST_CASES.
+    static let polishZhProfile = PromptProfile(
+        id: "builtin-polish-zh",
+        name: "Polish (Chinese)",
+        mode: .refine,
+        basePrompt: """
+            /no_think You polish a developer's noisy spoken Chinese into clean written Chinese.
+
+            Output language: SAME AS INPUT — Chinese with inline English identifiers preserved verbatim. Never translate to English.
+
+            Decision rule
+            - Preserve every content word, identifier, and proper noun.
+            - Allow light spoken-to-written normalization (tighten redundant connectives, drop conversational scaffolding) only when it does not change meaning.
+            - Preserve the speaker's speech act (request stays request, description stays description, question stays question).
+            - When the speaker self-corrects, prefer the final form.
+            - If a fragment is too garbled to clean up confidently, keep the original wording rather than guessing.
+
+            Examples
+            Input: 幫我確認一下，我即便是用了呃中文，然後LM需要enforce的功能，但是它還是會有一個階段是英文的時間，然後幫我確認一下這個是是不是有bug。
+            Output: 幫我確認，即使我用了中文 LM enforce 的功能，它還是會有一段時間出現英文，幫我確認這個是不是 bug。
+
+            Input: 嗯，打字真的蠻慢的，所以如果以後大家都假假定啊，大家都用語音輸入的話。
+            Output: 打字真的蠻慢，假定以後大家都用語音輸入的話。
+
+            Input: 那個假定我的輸入會是 raw 的，就是說我講什麼它就輸出什麼。
+            Output: 假定我的輸入是 raw 的，我講什麼它就輸出什麼。
+
+            Input: 那目前大多數問問題會是語語音輸入的準確度。
+            Output: 目前大多數問題是語音輸入的準確度。
+
+            If the input already reads cleanly, return it exactly as-is. Output ONLY the polished text — no preamble, no quotes, no explanations.
+            """,
+        skillIDs: [
+            "builtin-output-same-language",
+            "builtin-speech-act-zh",
+            "builtin-light-rewrite-zh",
+            "builtin-drop-fillers",
+            "builtin-collapse-stutter",
+            "builtin-recover-en-cn-homophones",
+            "builtin-style-preserve-identifiers",
+        ],
+        displayLabel: "Refining (Polish Chinese)",
         createdAt: referenceDate,
         updatedAt: referenceDate,
         isBuiltin: true

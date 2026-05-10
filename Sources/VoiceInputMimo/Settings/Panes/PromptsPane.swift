@@ -1,8 +1,12 @@
 import SwiftUI
 
 /// Phase 4 Prompts pane — top-level mode switcher (Profiles / Skills) over
-/// two layouts. Profiles uses a 3-column HSplitView for browsing, editing,
-/// and live-testing; Skills mode uses a 2-column HSplitView for the library.
+/// two layouts. Both modes use a fixed-width sidebar `HStack` + flexible right
+/// pane (no SplitView primitives). HSplitView/VSplitView/NavigationSplitView
+/// all collapse intrinsic width when nested inside Settings' outer
+/// NavigationSplitView; HStack with `.frame(width:)` and a flexible content
+/// area is the only reliable layout in this nested context. See
+/// `wiki/patterns/swiftui-macos-nested-navigationsplitview-collapses-detail.md`.
 /// Phase 4B adds Import / Export toolbar buttons next to the mode picker.
 struct PromptsPane: View {
     @Environment(PromptStoreViewModel.self) private var store
@@ -58,26 +62,33 @@ struct PromptsPane: View {
 
     @ViewBuilder
     private var profilesLayout: some View {
-        HSplitView {
+        HStack(spacing: 0) {
             ProfileSidebar()
-                .frame(minWidth: 220, idealWidth: 240, maxWidth: 320)
-
-            ProfileEditor()
-                .frame(minWidth: 360, idealWidth: 460)
-
-            PromptTestPanel()
-                .frame(minWidth: 320, idealWidth: 380)
+                .frame(width: 240)
+            Divider()
+            VStack(spacing: 0) {
+                ProfileEditor()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                Divider()
+                // Test panel gets a fixed strip at the bottom — same pattern
+                // as ClipboardHistoryView's detail strip. Internal TextEditor
+                // + history List size themselves within this height.
+                PromptTestPanel()
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 280)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 
     @ViewBuilder
     private var skillsLayout: some View {
-        HSplitView {
+        HStack(spacing: 0) {
             SkillSidebar()
-                .frame(minWidth: 220, idealWidth: 260, maxWidth: 340)
-
+                .frame(width: 240)
+            Divider()
             SkillEditor()
-                .frame(minWidth: 380, idealWidth: 540)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
     }
 

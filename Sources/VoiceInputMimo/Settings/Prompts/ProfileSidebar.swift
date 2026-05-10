@@ -44,7 +44,6 @@ struct ProfileSidebar: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
         }
-        .navigationSplitViewColumnWidth(min: 200, ideal: 240, max: 320)
     }
 
     @ViewBuilder

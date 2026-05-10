@@ -8,7 +8,7 @@ CODESIGN_IDENTITY ?= VoiceInputMimo Local
 # which generates a fresh hash every build → TCC re-prompts on every install.
 SIGNARG := $(shell security find-identity -v -p codesigning 2>/dev/null | grep -qF "$(CODESIGN_IDENTITY)" && echo "$(CODESIGN_IDENTITY)" || echo "-")
 
-.PHONY: build clean install run cert-setup server-start server-stop e2e-phase1 e2e-phase2 e2e-phase3 e2e-phase4 e2e-phase5 e2e-phase6
+.PHONY: build clean install run cert-setup dmg server-start server-stop e2e-phase1 e2e-phase2 e2e-phase3 e2e-phase4 e2e-phase5 e2e-phase6
 
 build:
 	swift build -c release
@@ -40,6 +40,13 @@ install: build
 	rm -rf /Applications/$(APP_BUNDLE)
 	cp -r $(APP_BUNDLE) /Applications/
 	@echo "✅ Installed to /Applications/$(APP_BUNDLE)"
+
+# Build a distributable DMG (self-signed, NOT Apple-notarized). Output goes
+# to dist/. Override version with `VERSION=1.2.3 make dmg`. Downloaders need
+# to right-click → Open the first time to bypass Gatekeeper — see
+# README-INSTALL.txt that gets bundled into the DMG.
+dmg: build
+	@bash scripts/build-dmg.sh
 
 server-start:
 	cd server && MIMO_PRELOAD=1 nohup ./run.sh > /tmp/mimo-asr-server.log 2>&1 &

@@ -5,7 +5,6 @@ DerivedData/
 *.xcodeproj/
 *.xcworkspace/
 *.dSYM.zip
-VoiceInputMimo.app/
 
 # Claude Code project state
 .claude/
@@ -45,3 +44,6 @@ fixtures/audio/
 
 # Built app bundle
 VoiceInputMimo.app/
+
+# DMG distribution artifacts (built by `make dmg`)
+dist/

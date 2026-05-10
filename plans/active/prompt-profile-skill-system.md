@@ -571,8 +571,8 @@ v1 完成判定：
 **邏輯層**
 - [ ] 8 個 builtin skill + 2 個 builtin profile 出廠存在
 - [ ] Fresh install 啟動後 `prompts/` 自動 bootstrap
-- [ ] 既有 UserDefaults 自訂 prompt 自動 import 為 profile
-- [ ] `bench_refine_prompt_ab.py` 改用 PromptStore，6/6 case 仍命中（v1.1 baseline 不退步）
+- [x] 既有 UserDefaults 自訂 prompt 自動 import 為 profile（PromptMigration.bootstrapIfNeeded）
+- [x] `bench_refine_prompt_ab.py` 改用 PromptStore，6/6 case 仍命中（v1.1 baseline 不退步）— v1-store 5/6 = v1 5/6，latency 1652ms < v1 1674ms（`harness/refine-prompt-store-acceptance-revalidate-*.md`）
 
 **Prompt 分頁（A）**
 - [ ] Settings → Prompts 三欄佈局（sidebar / editor / test panel）渲染正常

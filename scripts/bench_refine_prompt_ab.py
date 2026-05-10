@@ -91,6 +91,67 @@ _V1_STORE_SKILLS = [
 PROMPT_V1_STORE = "\n\n".join([_V1_STORE_BASE.strip()] + _V1_STORE_SKILLS)
 
 
+# Mirrors Sources/VoiceInputMimo/Prompts/BuiltinPromptCatalog.swift polishZhProfile:
+# basePrompt below + 7 skill snippets appended in order with "\n\n" separators
+# (matches PromptComposer.render). Source of truth is the Swift catalog;
+# if catalog content changes, update both.
+_V1_POLISH_BASE = """/no_think You polish a developer's noisy spoken Chinese into clean written Chinese.
+
+Output language: SAME AS INPUT — Chinese with inline English identifiers preserved verbatim. Never translate to English.
+
+Decision rule
+- Preserve every content word, identifier, and proper noun.
+- Allow light spoken-to-written normalization (tighten redundant connectives, drop conversational scaffolding) only when it does not change meaning.
+- Preserve the speaker's speech act (request stays request, description stays description, question stays question).
+- When the speaker self-corrects, prefer the final form.
+- If a fragment is too garbled to clean up confidently, keep the original wording rather than guessing.
+
+Examples
+Input: 幫我確認一下，我即便是用了呃中文，然後LM需要enforce的功能，但是它還是會有一個階段是英文的時間，然後幫我確認一下這個是是不是有bug。
+Output: 幫我確認，即使我用了中文 LM enforce 的功能，它還是會有一段時間出現英文，幫我確認這個是不是 bug。
+
+Input: 嗯，打字真的蠻慢的，所以如果以後大家都假假定啊，大家都用語音輸入的話。
+Output: 打字真的蠻慢，假定以後大家都用語音輸入的話。
+
+Input: 那個假定我的輸入會是 raw 的，就是說我講什麼它就輸出什麼。
+Output: 假定我的輸入是 raw 的，我講什麼它就輸出什麼。
+
+Input: 那目前大多數問問題會是語語音輸入的準確度。
+Output: 目前大多數問題是語音輸入的準確度。
+
+If the input already reads cleanly, return it exactly as-is. Output ONLY the polished text — no preamble, no quotes, no explanations."""
+
+_V1_POLISH_SKILLS = [
+    # builtin-output-same-language
+    "Output the SAME LANGUAGE as input — never translate to English. Mixed Chinese/English must stay mixed.",
+    # builtin-speech-act-zh
+    "Speech act detection (CRITICAL — preserve speaker's intent in Chinese output):\n"
+    "- REQUEST (\"幫我X\", \"請X\", \"可以X嗎\") → keep imperative form (\"幫我X\", \"請X\")\n"
+    "- DESCRIPTION/STATEMENT (\"我現在X\", \"其實是X\", \"目前X\") → keep declarative\n"
+    "- QUESTION (\"會不會X\", \"為什麼X\", \"X嗎\") → keep question form\n"
+    "Do NOT convert between forms (e.g. do not turn \"幫我確認\" into \"請確認\", and do not flatten a request into a description).",
+    # builtin-light-rewrite-zh
+    "Allow light spoken-to-written normalization while preserving content:\n"
+    "- Tighten redundant connectives (\"即便是\" → \"即使\", \"所以如果...的話\" can fold into \"假定...的話\").\n"
+    "- Drop conversational scaffolding that carries no content (\"就是說\", \"比如說啊\", \"那個\", \"我會說\", \"那種\").\n"
+    "- Reorder fragments ONLY when the spoken order yields ungrammatical written Chinese.\n"
+    "- When self-correction occurs (\"我即便...其實是...\"), keep the corrected form.\n"
+    "- Never substitute synonyms for content words. Never add or remove content nouns / verbs / adjectives. Never summarize, never expand.\n"
+    "- Match the speaker's register (casual stays casual, formal stays formal).\n"
+    "- Preserve code identifiers, English tech names, and proper nouns verbatim.",
+    # builtin-drop-fillers
+    "Always drop verbal fillers when they carry no meaning: 嗯, 呃, 啊, 欸, 那個, 就是說.",
+    # builtin-collapse-stutter
+    "Always collapse immediate stutter or repetition: 假假定→假定, 或或者→或者, 問問題→問題, 語語音→語音, 需要需要→需要.",
+    # builtin-recover-en-cn-homophones
+    "Restore English words misheard as Chinese: 配森→Python, 杰森→JSON, 阿皮愛→API, 瑞克特→React, 康波奈特→component, 肉特→route. Also fix obvious Chinese homophone errors when context makes the correct character clear, and fix English/Chinese mix split incorrectly by the recognizer. Stuttered acronyms also collapse: L M K→LLM, A P I→API, J S→JS.",
+    # builtin-style-preserve-identifiers
+    "Preserve identifiers verbatim (camelCase / snake_case). Keep tech names in English (component, useState, API). Match original tone and intent. Avoid redundant words (整套流程 → workflow, not \"workflow flow\").",
+]
+
+PROMPT_V1_POLISH = "\n\n".join([_V1_POLISH_BASE.strip()] + _V1_POLISH_SKILLS)
+
+
 PROMPT_V1 = """/no_think You are a high-precision cleanup pass for a noisy Chinese ASR transcript. Output the SAME LANGUAGE as input — never translate to English. Mixed Chinese/English must stay mixed.
 
 Your job is to repair obvious recognition noise while preserving exactly what the speaker meant.
@@ -227,6 +288,7 @@ def main() -> int:
         out_v0, t_v0 = call_llm(args.base_url, args.model, PROMPT_V0, case["asr"], args.timeout)
         out_v1, t_v1 = call_llm(args.base_url, args.model, PROMPT_V1, case["asr"], args.timeout)
         out_v1s, t_v1s = call_llm(args.base_url, args.model, PROMPT_V1_STORE, case["asr"], args.timeout)
+        out_v1p, t_v1p = call_llm(args.base_url, args.model, PROMPT_V1_POLISH, case["asr"], args.timeout)
         rows.append(
             {
                 **case,
@@ -242,10 +304,14 @@ def main() -> int:
                 "v1s_ms": int(t_v1s * 1000),
                 "v1s_changed": out_v1s != case["asr"],
                 "v1s_delta_chars": len(out_v1s) - len(case["asr"]),
+                "v1p_out": out_v1p,
+                "v1p_ms": int(t_v1p * 1000),
+                "v1p_changed": out_v1p != case["asr"],
+                "v1p_delta_chars": len(out_v1p) - len(case["asr"]),
             }
         )
 
-    print(f"\n# Refine prompt A/B/C backtest — {args.model}\n")
+    print(f"\n# Refine prompt A/B/C/D backtest — {args.model}\n")
     print(f"Endpoint: `{args.base_url}`  ·  Cases: {len(rows)}\n")
     print(
         "Variants:\n"
@@ -253,25 +319,32 @@ def main() -> int:
         "- **v1**: hardcoded v1.1 prompt currently in `LLMRefiner.defaultRefinePrompt`\n"
         "- **v1-store**: builtin Default Refine profile rendered via `PromptComposer.render` "
         "(basePrompt + 5 skills appended) — Phase 1 acceptance gate\n"
+        "- **v1-polish**: builtin Polish (Chinese) profile (basePrompt + 7 skills, "
+        "no `no-rephrase` lock) — informational; expected to edit MORE than v1-store\n"
     )
 
     print("## Summary\n")
     v0_changed = sum(1 for r in rows if r["v0_changed"])
     v1_changed = sum(1 for r in rows if r["v1_changed"])
     v1s_changed = sum(1 for r in rows if r["v1s_changed"])
+    v1p_changed = sum(1 for r in rows if r["v1p_changed"])
     v0_avg_ms = sum(r["v0_ms"] for r in rows) / len(rows) if rows else 0
     v1_avg_ms = sum(r["v1_ms"] for r in rows) / len(rows) if rows else 0
     v1s_avg_ms = sum(r["v1s_ms"] for r in rows) / len(rows) if rows else 0
+    v1p_avg_ms = sum(r["v1p_ms"] for r in rows) / len(rows) if rows else 0
     v0_total_delta = sum(r["v0_delta_chars"] for r in rows)
     v1_total_delta = sum(r["v1_delta_chars"] for r in rows)
     v1s_total_delta = sum(r["v1s_delta_chars"] for r in rows)
-    print("| Metric | v0 (legacy) | v1 (hardcoded) | v1-store (composed) |")
-    print("|---|---|---|---|")
-    print(f"| Cases changed | {v0_changed}/{len(rows)} | {v1_changed}/{len(rows)} | {v1s_changed}/{len(rows)} |")
-    print(f"| Avg latency | {v0_avg_ms:.0f} ms | {v1_avg_ms:.0f} ms | {v1s_avg_ms:.0f} ms |")
-    print(f"| Total Δchars | {v0_total_delta:+d} | {v1_total_delta:+d} | {v1s_total_delta:+d} |")
+    v1p_total_delta = sum(r["v1p_delta_chars"] for r in rows)
+    print("| Metric | v0 (legacy) | v1 (hardcoded) | v1-store (refine) | v1-polish (polish) |")
+    print("|---|---|---|---|---|")
+    print(f"| Cases changed | {v0_changed}/{len(rows)} | {v1_changed}/{len(rows)} | {v1s_changed}/{len(rows)} | {v1p_changed}/{len(rows)} |")
+    print(f"| Avg latency | {v0_avg_ms:.0f} ms | {v1_avg_ms:.0f} ms | {v1s_avg_ms:.0f} ms | {v1p_avg_ms:.0f} ms |")
+    print(f"| Total Δchars | {v0_total_delta:+d} | {v1_total_delta:+d} | {v1s_total_delta:+d} | {v1p_total_delta:+d} |")
     print()
-    print(f"**Acceptance**: v1-store changed = {v1s_changed}/{len(rows)} (must be >= {v1_changed}/{len(rows)} v1 baseline).")
+    print(f"**Acceptance (refine gate)**: v1-store changed = {v1s_changed}/{len(rows)} (must be >= {v1_changed}/{len(rows)} v1 baseline).")
+    print(f"**Polish sanity**: v1-polish changed = {v1p_changed}/{len(rows)}, total Δchars = {v1p_total_delta:+d} "
+          f"(should typically edit >= refine; if v1p ≈ v1-store the polish profile may be drifting back toward refine semantics).")
     print()
 
     print("## Per-case comparison\n")
@@ -281,9 +354,11 @@ def main() -> int:
         v0_tag = "🟰 unchanged" if not r["v0_changed"] else f"✏️ {r['v0_delta_chars']:+d}"
         v1_tag = "🟰 unchanged" if not r["v1_changed"] else f"✏️ {r['v1_delta_chars']:+d}"
         v1s_tag = "🟰 unchanged" if not r["v1s_changed"] else f"✏️ {r['v1s_delta_chars']:+d}"
+        v1p_tag = "🟰 unchanged" if not r["v1p_changed"] else f"✏️ {r['v1p_delta_chars']:+d}"
         print(f"**v0 ({r['v0_ms']} ms, {v0_tag})**: {r['v0_out']}\n")
         print(f"**v1 ({r['v1_ms']} ms, {v1_tag})**: {r['v1_out']}\n")
         print(f"**v1-store ({r['v1s_ms']} ms, {v1s_tag})**: {r['v1s_out']}\n")
+        print(f"**v1-polish ({r['v1p_ms']} ms, {v1p_tag})**: {r['v1p_out']}\n")
         print()
 
     if args.out_md:
@@ -292,14 +367,14 @@ def main() -> int:
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             # Reuse render — re-run prints
-            print(f"# Refine prompt A/B/C backtest — {args.model}\n")
+            print(f"# Refine prompt A/B/C/D backtest — {args.model}\n")
             print(f"Endpoint: `{args.base_url}`  ·  Cases: {len(rows)}\n")
             print("## Summary\n")
-            print("| Metric | v0 | v1 | v1-store |")
-            print("|---|---|---|---|")
-            print(f"| Cases changed | {v0_changed}/{len(rows)} | {v1_changed}/{len(rows)} | {v1s_changed}/{len(rows)} |")
-            print(f"| Avg latency | {v0_avg_ms:.0f} ms | {v1_avg_ms:.0f} ms | {v1s_avg_ms:.0f} ms |")
-            print(f"| Total Δchars | {v0_total_delta:+d} | {v1_total_delta:+d} | {v1s_total_delta:+d} |\n")
+            print("| Metric | v0 | v1 | v1-store | v1-polish |")
+            print("|---|---|---|---|---|")
+            print(f"| Cases changed | {v0_changed}/{len(rows)} | {v1_changed}/{len(rows)} | {v1s_changed}/{len(rows)} | {v1p_changed}/{len(rows)} |")
+            print(f"| Avg latency | {v0_avg_ms:.0f} ms | {v1_avg_ms:.0f} ms | {v1s_avg_ms:.0f} ms | {v1p_avg_ms:.0f} ms |")
+            print(f"| Total Δchars | {v0_total_delta:+d} | {v1_total_delta:+d} | {v1s_total_delta:+d} | {v1p_total_delta:+d} |\n")
             print("## Per-case comparison\n")
             for r in rows:
                 print(f"### {r['id']} — {r['label']}\n")
@@ -307,6 +382,7 @@ def main() -> int:
                 print(f"**v0**: {r['v0_out']}\n")
                 print(f"**v1**: {r['v1_out']}\n")
                 print(f"**v1-store**: {r['v1s_out']}\n")
+                print(f"**v1-polish**: {r['v1p_out']}\n")
         from pathlib import Path
         Path(args.out_md).write_text(buf.getvalue(), encoding="utf-8")
         print(f"Wrote markdown to: {args.out_md}", file=sys.stderr)

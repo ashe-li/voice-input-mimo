@@ -39,15 +39,16 @@ final class PromptMigrationTests: XCTestCase {
 
     // MARK: - Fresh bootstrap
 
-    func testFreshBootstrapWritesEightBuiltinSkills() throws {
+    func testFreshBootstrapWritesTenBuiltinSkills() throws {
         let result = try makeMigration().bootstrapIfNeeded()
         XCTAssertTrue(result.didBootstrap)
-        XCTAssertEqual(try store.listSkills().count, 8)
+        XCTAssertEqual(try store.listSkills().count, 10)
     }
 
-    func testFreshBootstrapWritesTwoBuiltinProfiles() throws {
+    func testFreshBootstrapWritesThreeBuiltinProfiles() throws {
         _ = try makeMigration().bootstrapIfNeeded()
-        XCTAssertEqual(try store.listProfiles(mode: .refine).count, 1)
+        // Default Refine + Polish (Chinese) both live under .refine mode
+        XCTAssertEqual(try store.listProfiles(mode: .refine).count, 2)
         XCTAssertEqual(try store.listProfiles(mode: .claudeCode).count, 1)
     }
 
@@ -73,8 +74,8 @@ final class PromptMigrationTests: XCTestCase {
 
         let second = try migration.bootstrapIfNeeded()
         XCTAssertFalse(second.didBootstrap, "second run must detect existing active.json and skip")
-        XCTAssertEqual(try store.listSkills().count, 8)
-        XCTAssertEqual(try store.listProfiles(mode: .refine).count, 1)
+        XCTAssertEqual(try store.listSkills().count, 10)
+        XCTAssertEqual(try store.listProfiles(mode: .refine).count, 2)
     }
 
     // MARK: - UserDefaults import
@@ -84,7 +85,7 @@ final class PromptMigrationTests: XCTestCase {
         let result = try makeMigration().bootstrapIfNeeded()
         XCTAssertNotNil(result.importedRefineProfileID)
         let profiles = try store.listProfiles(mode: .refine)
-        XCTAssertEqual(profiles.count, 2)  // builtin + imported
+        XCTAssertEqual(profiles.count, 3)  // 2 builtin (Default Refine + Polish ZH) + 1 imported
         let imported = profiles.first { !$0.isBuiltin }
         XCTAssertEqual(imported?.basePrompt, "USER CUSTOM REFINE PROMPT")
         XCTAssertFalse(imported?.isBuiltin ?? true)
@@ -94,7 +95,7 @@ final class PromptMigrationTests: XCTestCase {
         defaults.set("REFINE-DEFAULT", forKey: "refineSystemPrompt")
         let result = try makeMigration().bootstrapIfNeeded()
         XCTAssertNil(result.importedRefineProfileID)
-        XCTAssertEqual(try store.listProfiles(mode: .refine).count, 1)
+        XCTAssertEqual(try store.listProfiles(mode: .refine).count, 2)  // Default Refine + Polish ZH
     }
 
     func testCustomClaudeCodePromptImportsAsProfile() throws {

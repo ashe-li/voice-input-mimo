@@ -5,8 +5,8 @@ final class BuiltinPromptCatalogTests: XCTestCase {
 
     // MARK: - Skills inventory
 
-    func testCatalogProvidesEightBuiltinSkills() {
-        XCTAssertEqual(BuiltinPromptCatalog.skills.count, 8)
+    func testCatalogProvidesTenBuiltinSkills() {
+        XCTAssertEqual(BuiltinPromptCatalog.skills.count, 10)
     }
 
     func testAllBuiltinSkillsHaveBuiltinFlag() {
@@ -34,6 +34,8 @@ final class BuiltinPromptCatalogTests: XCTestCase {
             "builtin-recover-en-cn-homophones",
             "builtin-no-rephrase",
             "builtin-speech-act-detection",
+            "builtin-speech-act-zh",
+            "builtin-light-rewrite-zh",
             "builtin-style-preserve-identifiers",
             "builtin-output-english-only",
         ]
@@ -47,10 +49,12 @@ final class BuiltinPromptCatalogTests: XCTestCase {
         XCTAssertEqual(map["builtin-output-english-only"], .format)
         XCTAssertEqual(map["builtin-drop-fillers"], .style)
         XCTAssertEqual(map["builtin-no-rephrase"], .style)
+        XCTAssertEqual(map["builtin-light-rewrite-zh"], .style)
         XCTAssertEqual(map["builtin-style-preserve-identifiers"], .style)
         XCTAssertEqual(map["builtin-collapse-stutter"], .recovery)
         XCTAssertEqual(map["builtin-recover-en-cn-homophones"], .recovery)
         XCTAssertEqual(map["builtin-speech-act-detection"], .speechAct)
+        XCTAssertEqual(map["builtin-speech-act-zh"], .speechAct)
     }
 
     func testAllBuiltinSkillsHaveNonEmptyContent() {
@@ -64,8 +68,8 @@ final class BuiltinPromptCatalogTests: XCTestCase {
 
     // MARK: - Profiles
 
-    func testCatalogProvidesTwoBuiltinProfiles() {
-        XCTAssertEqual(BuiltinPromptCatalog.profiles.count, 2)
+    func testCatalogProvidesThreeBuiltinProfiles() {
+        XCTAssertEqual(BuiltinPromptCatalog.profiles.count, 3)
     }
 
     func testBuiltinProfilesAreMarkedBuiltin() {
@@ -84,6 +88,63 @@ final class BuiltinPromptCatalogTests: XCTestCase {
         let p = BuiltinPromptCatalog.profiles.first { $0.id == "builtin-default-claude-code" }
         XCTAssertNotNil(p)
         XCTAssertEqual(p?.mode, .claudeCode)
+    }
+
+    func testPolishZhProfileExistsAndIsRefineMode() {
+        let p = BuiltinPromptCatalog.profiles.first { $0.id == "builtin-polish-zh" }
+        XCTAssertNotNil(p)
+        XCTAssertEqual(p?.mode, .refine)
+    }
+
+    func testPolishZhSkillIDsResolveToBuiltinSkills() {
+        let p = BuiltinPromptCatalog.profiles.first { $0.id == "builtin-polish-zh" }!
+        let skillIDSet = Set(BuiltinPromptCatalog.skills.map(\.id))
+        for skillID in p.skillIDs {
+            XCTAssertTrue(skillIDSet.contains(skillID), "skill \(skillID) referenced but not in catalog")
+        }
+    }
+
+    func testPolishZhSkillOrderMatchesPlan() {
+        // output-same-language FIRST so the model commits to Chinese output
+        // before any cleanup-style skills can drag it toward translation.
+        // speech-act-zh BEFORE light-rewrite-zh so register-preservation rule
+        // has higher priority than the rewrite license.
+        let p = BuiltinPromptCatalog.profiles.first { $0.id == "builtin-polish-zh" }!
+        XCTAssertEqual(p.skillIDs, [
+            "builtin-output-same-language",
+            "builtin-speech-act-zh",
+            "builtin-light-rewrite-zh",
+            "builtin-drop-fillers",
+            "builtin-collapse-stutter",
+            "builtin-recover-en-cn-homophones",
+            "builtin-style-preserve-identifiers",
+        ])
+    }
+
+    func testPolishZhDoesNotIncludeNoRephrase() {
+        // The whole point of polish-zh is to lift the no-rephrase lock so the
+        // model can do light spoken-to-written normalization. If no-rephrase
+        // sneaks back in, polish degrades into Default Refine.
+        let p = BuiltinPromptCatalog.profiles.first { $0.id == "builtin-polish-zh" }!
+        XCTAssertFalse(p.skillIDs.contains("builtin-no-rephrase"))
+    }
+
+    func testPolishZhRendersWithCriticalKeywords() {
+        let profile = BuiltinPromptCatalog.profiles.first { $0.id == "builtin-polish-zh" }!
+        let rendered = PromptComposer.render(profile: profile, skills: BuiltinPromptCatalog.skills)
+
+        XCTAssertTrue(rendered.contains("/no_think"))
+        XCTAssertTrue(rendered.contains("Examples"), "few-shot examples must remain in prompt")
+        XCTAssertTrue(rendered.contains("假定"), "must demonstrate stutter cleanup in examples")
+        XCTAssertTrue(
+            rendered.contains("light spoken-to-written") || rendered.contains("Light spoken-to-written"),
+            "must license light rewrite"
+        )
+        XCTAssertTrue(rendered.contains("speech act") || rendered.contains("Speech act"))
+        XCTAssertFalse(
+            rendered.contains("translate to English") && !rendered.contains("Never translate to English"),
+            "polish-zh must explicitly forbid English translation"
+        )
     }
 
     func testDefaultRefineSkillIDsResolveToBuiltinSkills() {

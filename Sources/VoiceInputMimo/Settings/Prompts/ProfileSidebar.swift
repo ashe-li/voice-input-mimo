@@ -79,7 +79,9 @@ struct ProfileSidebar: View {
             suffix: source.suffix,
             modelOverride: source.modelOverride,
             temperature: source.temperature,
-            displayLabel: source.displayLabel,
+            // Drop displayLabel — the builtin's "Refining (Default Refine)"
+            // form is meaningless for a renamed user copy.
+            displayLabel: nil,
             slotOverrides: source.slotOverrides,
             createdAt: Date(),
             updatedAt: Date(),

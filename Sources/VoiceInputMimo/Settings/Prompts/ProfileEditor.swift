@@ -27,6 +27,31 @@ struct ProfileEditor: View {
         let isBuiltin = pane.draft?.isBuiltin ?? false
 
         Form {
+            if isBuiltin {
+                Section {
+                    HStack(spacing: 12) {
+                        Image(systemName: "lock.fill")
+                            .foregroundStyle(.secondary)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("This is a builtin profile and can't be edited directly.")
+                                .font(.callout)
+                            Text("Duplicate it to get an editable copy with the same prompt and skills.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button {
+                            duplicateBuiltin()
+                        } label: {
+                            Label("Duplicate to Edit", systemImage: "plus.square.on.square")
+                        }
+                        .controlSize(.regular)
+                        .keyboardShortcut("d", modifiers: [.command])
+                    }
+                    .padding(.vertical, 6)
+                }
+            }
+
             Section {
                 TextField("Name", text: nameBinding(pane: pane))
                     .disabled(isBuiltin)
@@ -35,7 +60,7 @@ struct ProfileEditor: View {
             } header: {
                 SectionHeading(
                     pane.draft?.name ?? "",
-                    subtitle: isBuiltin ? "Builtin · read-only — duplicate to edit" : nil
+                    subtitle: isBuiltin ? "Builtin · read-only" : nil
                 )
             }
 
@@ -191,6 +216,27 @@ struct ProfileEditor: View {
     private func saveDraft() {
         guard let d = pane.draft else { return }
         store.saveProfile(d)
+    }
+
+    private func duplicateBuiltin() {
+        guard let source = pane.draft else { return }
+        let copy = PromptProfile(
+            id: "user-\(UUID().uuidString.prefix(8))",
+            name: "\(source.name) Copy",
+            mode: source.mode,
+            basePrompt: source.basePrompt,
+            skillIDs: source.skillIDs,
+            suffix: source.suffix,
+            modelOverride: source.modelOverride,
+            temperature: source.temperature,
+            displayLabel: nil,
+            slotOverrides: source.slotOverrides,
+            createdAt: Date(),
+            updatedAt: Date(),
+            isBuiltin: false
+        )
+        store.saveProfile(copy)
+        pane.selectProfile(copy)
     }
 }
 

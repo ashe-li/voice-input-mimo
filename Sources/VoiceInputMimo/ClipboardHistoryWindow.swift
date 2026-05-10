@@ -1,37 +1,30 @@
 import AppKit
 import SwiftUI
 
-/// Phase 5 — thin NSWindow shell that hosts `ClipboardHistoryView`. Replaces
-/// the 322-line hand-rolled NSPanel + NSTableView. Public entry point
-/// `openClipboardHistory()` (status menu, ⌘⌥H) is unchanged.
+/// Thin NSWindow shell that hosts `ClipboardHistoryView`. The earlier
+/// version injected an `NSVisualEffectView` as a subview of the host
+/// controller's view, which silently blocked SwiftUI's `NavigationSplitView`
+/// from laying out — the window opened with toolbar visible but body empty.
+/// SwiftUI now owns its own background; the NSWindow stays minimal.
 final class ClipboardHistoryWindow: NSWindow {
     init() {
-        let root = MainActor.assumeIsolated { ClipboardHistoryView() }
+        let root = MainActor.assumeIsolated {
+            ClipboardHistoryView()
+                .frame(minWidth: 720, idealWidth: 880, minHeight: 420, idealHeight: 560)
+        }
         let host = MainActor.assumeIsolated { NSHostingController(rootView: root) }
 
         super.init(
             contentRect: NSRect(x: 0, y: 0, width: 880, height: 560),
-            styleMask: [.titled, .closable, .resizable, .miniaturizable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .resizable, .miniaturizable],
             backing: .buffered,
             defer: false
         )
 
         self.title = "Clipboard History"
-        self.titlebarAppearsTransparent = true
-        self.titleVisibility = .visible
         self.isReleasedWhenClosed = false
         self.minSize = NSSize(width: 720, height: 420)
         self.contentViewController = host
         self.center()
-
-        if let cv = self.contentView {
-            cv.wantsLayer = true
-            let visualEffect = NSVisualEffectView(frame: cv.bounds)
-            visualEffect.autoresizingMask = [.width, .height]
-            visualEffect.material = .windowBackground
-            visualEffect.blendingMode = .behindWindow
-            visualEffect.state = .active
-            cv.addSubview(visualEffect, positioned: .below, relativeTo: nil)
-        }
     }
 }

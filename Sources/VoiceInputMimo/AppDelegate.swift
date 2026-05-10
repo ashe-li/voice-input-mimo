@@ -219,10 +219,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
         currentZH = trimmed
-        overlayPanel.transition(to: .zhReady(zh: trimmed))
 
         let refiner = LLMRefiner.shared
         if refiner.isEnabled && refiner.isConfigured {
+            // ZH-ready preview only when LLM stage is going to follow; ASR-only
+            // path skips this so we don't show "Chinese ready" then immediately
+            // "Ready" 0.6 s later.
+            overlayPanel.transition(to: .zhReady(zh: trimmed))
             // Stage 2: LLM cleanup / translate. Hold ZH for ~0.4 s so user sees
             // it clearly before the refining indicator appears — but only if
             // the LLM is actually slower than 0.4 s. Cancel the deferred work
@@ -273,10 +276,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
         } else {
-            // ASR-only path: show ZH for a moment, then inject.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
-                self?.completeWithoutTranslation(trimmed)
-            }
+            // ASR-only path: single ready state. `.bothReady` already lingers
+            // ~0.7 s before dismissing, so a separate ZH-preview is redundant.
+            completeWithoutTranslation(trimmed)
         }
     }
 
@@ -420,13 +422,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         outputMenu.addItem(.separator())
 
-        // Phase 6 — Active Profile submenu (per-mode switcher)
-        activeProfileMenuItem = NSMenuItem(title: "啟用 Profile", action: nil, keyEquivalent: "")
-        activeProfileMenuItem.submenu = NSMenu()
-        outputMenu.addItem(activeProfileMenuItem)
-
-        outputMenu.addItem(.separator())
-
         let outputHelpItem = NSMenuItem(
             title: "每次 session 會保留 ASR 原文與貼上內容",
             action: nil,
@@ -437,6 +432,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         outputModeMenuItem.submenu = outputMenu
         menu.addItem(outputModeMenuItem)
+
+        // Active Profile menu sits at top level, peer to "輸出模式". A second
+        // submenu nested *inside* "輸出模式" caused a 3-level deep hover chain
+        // that macOS handles unreliably (auto-open delays, sibling close
+        // races). Hoisting it makes mode-switch and profile-switch responsive.
+        activeProfileMenuItem = NSMenuItem(title: "啟用 Profile", action: nil, keyEquivalent: "")
+        activeProfileMenuItem.submenu = NSMenu()
+        menu.addItem(activeProfileMenuItem)
+
         refreshOutputModeMenu()
 
         // Clipboard History viewer
@@ -561,7 +565,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                   let profile = vm.profiles(for: mode).first(where: { $0.id == id }) else {
                 return nil
             }
-            if let label = profile.displayLabel, !label.isEmpty { return label }
             return profile.name
         }
     }

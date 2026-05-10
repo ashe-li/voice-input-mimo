@@ -169,6 +169,7 @@ final class MockClipboardArchive: ClipboardArchiveProviding, @unchecked Sendable
     var restoreCallIndices: [Int] = []
     var deleteCallIndices: [Int] = []
     var clearCalls: Int = 0
+    var archiveURL: URL = URL(fileURLWithPath: "/tmp/mock-clipboard-archive.txt")
 
     init(entries: [ClipboardArchive.Entry] = []) {
         self.stored = entries

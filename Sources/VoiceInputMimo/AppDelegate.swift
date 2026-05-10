@@ -42,8 +42,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSLog("[AppDelegate] launch preview=%@", isPreviewMode ? "YES" : "NO")
         terminateConflictingApps()
-        bootstrapPromptStore()
         setupStatusBar()
+        bootstrapPromptStore()
 
         if ProcessInfo.processInfo.environment["VOICE_INPUT_MIMO_PREVIEW"] == "1" {
             installPreviewArchive()
@@ -95,9 +95,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    /// Phase 6 — bootstrap the prompt store on first launch and prime the
-    /// `@Observable` view model used by Settings + status menu. Idempotent:
-    /// once `prompts/active.json` exists `bootstrapIfNeeded` short-circuits.
+    /// Idempotent: once `prompts/active.json` exists `bootstrapIfNeeded`
+    /// short-circuits, so this is safe to call on every launch.
     private func bootstrapPromptStore() {
         let migration = PromptMigration(
             store: PromptStore.shared,
@@ -552,11 +551,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshOutputModeMenu()
     }
 
-    /// Phase 6 — pick the user-visible label for the active profile of `mode`.
-    /// Falls back to `nil` when no profile is active, in which case the
-    /// overlay uses its plain "Refining Chinese" / "Converting to English"
-    /// text without parenthesised profile name.
-    ///
     /// Bridged through `MainActor.assumeIsolated` because the Phase enum is
     /// constructed on the main thread (DispatchWorkItem on `.main`) but the
     /// surrounding AppDelegate isn't actor-isolated.
@@ -592,10 +586,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshActiveProfileMenu()
     }
 
-    /// Phase 6 — rebuild the "啟用 Profile" submenu from
-    /// `PromptStoreViewModel.shared`. Two sections (Refine / ClaudeCode) so
-    /// the user can pick the active profile per mode without leaving the
-    /// status menu.
     private func refreshActiveProfileMenu() {
         guard let menu = activeProfileMenuItem?.submenu else { return }
         menu.removeAllItems()
@@ -787,9 +777,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-/// Phase 6 — payload attached to active-profile NSMenuItems via
-/// `representedObject` so the click handler can route the (mode, id)
-/// pair without a selector-per-mode explosion.
+/// Routed via NSMenuItem.representedObject so a single selector handles
+/// every (mode, profile) click.
 private struct ProfileSelection {
     let mode: RefineMode
     let profileID: String

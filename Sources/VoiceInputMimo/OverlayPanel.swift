@@ -113,7 +113,7 @@ final class OverlayPanel: NSPanel {
             present("Chinese ready: \(Self.preview(zh))", animating: false)
         case .refining(_, let elapsed, let translating, let profileLabel):
             let action = translating ? "Converting to English" : "Refining Chinese"
-            let suffix = (profileLabel?.isEmpty == false) ? " (\(profileLabel!))" : ""
+            let suffix = profileLabel.flatMap { $0.isEmpty ? nil : " (\($0))" } ?? ""
             present("\(action)\(suffix) \(Self.formatElapsed(elapsed))", animating: true)
         case .bothReady(let zh, let en):
             present("Ready: \(Self.preview(en.isEmpty ? zh : en))", animating: false)

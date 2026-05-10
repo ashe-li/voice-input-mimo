@@ -99,6 +99,27 @@ curl -s -X POST http://127.0.0.1:8765/v1/audio/transcriptions \
 
 `raw_text` 只在 post-process 改變內容時才出現（節省 payload）。
 
+## 下載安裝（macOS）
+
+> ⚠️ **這個 .dmg 是 self-signed，沒有經過 Apple Notarization**。第一次打開時 Gatekeeper 會擋下，需要手動繞過。詳見下方步驟，或下載後查看 DMG 內附的 `README-INSTALL.txt`。
+
+從 [GitHub Releases](../../releases) 下載最新的 `VoiceInputMimo-<version>.dmg`，雙擊掛載後：
+
+1. **拖** `VoiceInputMimo.app` **到** `Applications` **資料夾**
+2. **第一次打開**：右鍵點 `VoiceInputMimo.app` → 選「打開」→ 在警告視窗按「打開」（只需一次，之後雙擊就能用）
+   - 或進「系統設定 → 隱私權與安全性」→ 滑到底找到 VoiceInputMimo 被擋的訊息 → 按「仍要打開」
+3. **授權**：app 會要求麥克風 + 輔助使用權限，兩個都要給才能用 Fn 鍵錄音
+4. **依賴**：app 本身只是前端，**還需要在本機跑** ASR engine + OpenAI-compatible LLM backend（見下方「啟動」段落）
+
+### 自己 build DMG
+
+```bash
+make cert-setup     # 一次性，建立本地 self-signed cert（讓 TCC 權限跨 rebuild 持續）
+make dmg            # 產出 dist/VoiceInputMimo-<date>-<sha>.dmg
+```
+
+`VERSION=1.2.3 make dmg` 可以指定版本號當檔名 suffix（不指定就用 `<date>-<git-sha>`）。
+
 ## 啟動
 
 ```bash

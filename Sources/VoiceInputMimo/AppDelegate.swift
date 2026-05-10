@@ -17,6 +17,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var englishOutputMenuItem: NSMenuItem!
     private var chineseOutputMenuItem: NSMenuItem!
     private var refinedChineseOutputMenuItem: NSMenuItem!
+    private var structureOutputMenuItem: NSMenuItem!
     private var asrServerMenuItem: NSMenuItem!
     private var asrServerStatusMenuItem: NSMenuItem!
     private lazy var settingsWindow = SettingsWindow()
@@ -126,6 +127,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         keyMonitor.onFnDown = { [weak self] in self?.fnDown() }
         keyMonitor.onFnUp = { [weak self] in self?.fnUp() }
+        keyMonitor.onCycleNext = { [weak self] in self?.cycleOutputMode(direction: 1) }
+        keyMonitor.onCyclePrev = { [weak self] in self?.cycleOutputMode(direction: -1) }
         NotificationCenter.default.addObserver(
             forName: .shortcutBindingDidChange, object: nil, queue: .main
         ) { [weak self] _ in self?.keyMonitor.invalidateShortcutCache() }
@@ -267,8 +270,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let refiner = LLMRefiner.shared
         if refiner.isEnabled && refiner.isConfigured {
             refiningHoldWork?.cancel()
-            let translating = refiner.claudeCodeModeEnabled
-            let activeMode: RefineMode = translating ? .claudeCode : .refine
+            // Resolve the effective mode from BOTH toggles. Hardcoding the
+            // ternary against `claudeCodeModeEnabled` would silently fall
+            // back to `.refine` when structure mode is active, which would
+            // make the overlay show the wrong profile label (LLM call
+            // itself uses the routed structure profile via LLMRefiner).
+            let activeMode = LLMRefiner.activeModeFromToggles(
+                claudeCodeEnabled: refiner.claudeCodeModeEnabled,
+                structureEnabled: refiner.structureModeEnabled
+            )
+            let translating = activeMode == .claudeCode
             let profileLabel = activeProfileLabel(for: activeMode)
 
             if translating {
@@ -328,7 +339,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// LLM succeeded: show ZH + EN side-by-side for the linger window, then inject
     /// the English. Overlay handles dismissal internally after `overlayLingerSeconds`.
     private func completeWithEnglish(_ english: String) {
-        let translating = LLMRefiner.shared.claudeCodeModeEnabled
+        // `translating` controls dual-line (ZH+EN) vs single-line overlay
+        // render. Only ClaudeCode mode actually translates to a different
+        // language; structure mode and refine mode both stay zh-TW so the
+        // overlay collapses to single-line.
+        let refiner = LLMRefiner.shared
+        let activeMode = LLMRefiner.activeModeFromToggles(
+            claudeCodeEnabled: refiner.claudeCodeModeEnabled,
+            structureEnabled: refiner.structureModeEnabled
+        )
+        let translating = activeMode == .claudeCode
         overlayPanel.transition(to: .bothReady(zh: currentZH, en: english, translating: translating))
         ClipboardArchive.shared.saveSession(zh: currentZH, english: english)
         injectImmediately(english)
@@ -468,6 +488,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         englishOutputMenuItem.target = self
         outputMenu.addItem(englishOutputMenuItem)
 
+        structureOutputMenuItem = NSMenuItem(
+            title: "中文 複合情境（會議／任務／需求…）",
+            action: #selector(selectStructureOutputMode),
+            keyEquivalent: ""
+        )
+        structureOutputMenuItem.target = self
+        outputMenu.addItem(structureOutputMenuItem)
+
         outputMenu.addItem(.separator())
 
         let outputHelpItem = NSMenuItem(
@@ -577,7 +605,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc private func selectEnglishOutputMode() {
         let refiner = LLMRefiner.shared
         refiner.isEnabled = true
-        refiner.claudeCodeModeEnabled = true
+        refiner.claudeCodeModeEnabled = true  // setter clears structureModeEnabled
         refreshOutputModeMenu()
     }
 
@@ -585,6 +613,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let refiner = LLMRefiner.shared
         refiner.isEnabled = false
         refiner.claudeCodeModeEnabled = false
+        refiner.structureModeEnabled = false
         refreshOutputModeMenu()
     }
 
@@ -592,7 +621,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let refiner = LLMRefiner.shared
         refiner.isEnabled = true
         refiner.claudeCodeModeEnabled = false
+        refiner.structureModeEnabled = false
         refreshOutputModeMenu()
+    }
+
+    @objc private func selectStructureOutputMode() {
+        let refiner = LLMRefiner.shared
+        refiner.isEnabled = true
+        refiner.structureModeEnabled = true  // setter clears claudeCodeModeEnabled
+        refreshOutputModeMenu()
+    }
+
+    /// Output mode in the order used by the fn+arrow cycle hotkey. Matches the
+    /// menu-bar reading order (top→bottom) so users build a consistent mental
+    /// model: fn+→ moves "down the menu", fn+← moves "up".
+    private enum OutputModeChoice: CaseIterable {
+        case raw          // ASR-only, LLM disabled
+        case refine       // ZH cleanup
+        case claudeCode   // ZH→EN
+        case structure    // ZH→template
+
+        static let cycleOrder: [OutputModeChoice] = [.raw, .refine, .claudeCode, .structure]
+    }
+
+    private func currentOutputModeChoice() -> OutputModeChoice {
+        let refiner = LLMRefiner.shared
+        if !refiner.isEnabled { return .raw }
+        if refiner.structureModeEnabled { return .structure }
+        if refiner.claudeCodeModeEnabled { return .claudeCode }
+        return .refine
+    }
+
+    private func applyOutputModeChoice(_ choice: OutputModeChoice) {
+        switch choice {
+        case .raw: selectChineseOutputMode()
+        case .refine: selectRefinedChineseOutputMode()
+        case .claudeCode: selectEnglishOutputMode()
+        case .structure: selectStructureOutputMode()
+        }
+    }
+
+    private func cycleOutputMode(direction: Int) {
+        let order = OutputModeChoice.cycleOrder
+        let current = currentOutputModeChoice()
+        let idx = order.firstIndex(of: current) ?? 0
+        let nextIdx = ((idx + direction) % order.count + order.count) % order.count
+        applyOutputModeChoice(order[nextIdx])
     }
 
     /// Bridged through `MainActor.assumeIsolated` because the Phase enum is
@@ -610,21 +684,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func refreshOutputModeMenu() {
-        let refiner = LLMRefiner.shared
-        let isEnglish = refiner.isEnabled && refiner.claudeCodeModeEnabled
-        let isRefinedChinese = refiner.isEnabled && !refiner.claudeCodeModeEnabled
-        let isChinese = !refiner.isEnabled
+        let choice = currentOutputModeChoice()
 
-        englishOutputMenuItem.state = isEnglish ? .on : .off
-        chineseOutputMenuItem.state = isChinese ? .on : .off
-        refinedChineseOutputMenuItem.state = isRefinedChinese ? .on : .off
+        chineseOutputMenuItem.state = (choice == .raw) ? .on : .off
+        refinedChineseOutputMenuItem.state = (choice == .refine) ? .on : .off
+        englishOutputMenuItem.state = (choice == .claudeCode) ? .on : .off
+        structureOutputMenuItem.state = (choice == .structure) ? .on : .off
 
-        if isEnglish {
-            outputModeMenuItem.title = "輸出模式：英文翻譯"
-        } else if isRefinedChinese {
-            outputModeMenuItem.title = "輸出模式：中文修正"
-        } else {
-            outputModeMenuItem.title = "輸出模式：中文 ASR"
+        switch choice {
+        case .raw: outputModeMenuItem.title = "輸出模式：中文 ASR"
+        case .refine: outputModeMenuItem.title = "輸出模式：中文修正"
+        case .claudeCode: outputModeMenuItem.title = "輸出模式：英文翻譯"
+        case .structure: outputModeMenuItem.title = "輸出模式：複合情境"
         }
     }
 

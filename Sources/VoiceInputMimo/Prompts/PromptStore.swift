@@ -147,6 +147,7 @@ final class PromptStore: PromptStoreProviding, @unchecked Sendable {
         switch mode {
         case .refine: id = selection.refineProfileID
         case .claudeCode: id = selection.claudeCodeProfileID
+        case .structure: id = selection.structureProfileID
         }
         return try loadProfile(id: id, mode: mode)
     }

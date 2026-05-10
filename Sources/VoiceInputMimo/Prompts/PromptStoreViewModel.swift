@@ -38,6 +38,7 @@ final class PromptStoreViewModel {
         do {
             profilesByMode[.refine] = try store.listProfiles(mode: .refine)
             profilesByMode[.claudeCode] = try store.listProfiles(mode: .claudeCode)
+            profilesByMode[.structure] = try store.listProfiles(mode: .structure)
             skills = try store.listSkills()
             activeSelection = try store.loadActiveSelection()
             lastError = nil
@@ -54,6 +55,7 @@ final class PromptStoreViewModel {
         switch mode {
         case .refine: return activeSelection?.refineProfileID
         case .claudeCode: return activeSelection?.claudeCodeProfileID
+        case .structure: return activeSelection?.structureProfileID
         }
     }
 
@@ -119,9 +121,23 @@ final class PromptStoreViewModel {
         let updated: ActiveSelection
         switch mode {
         case .refine:
-            updated = ActiveSelection(refineProfileID: id, claudeCodeProfileID: current.claudeCodeProfileID)
+            updated = ActiveSelection(
+                refineProfileID: id,
+                claudeCodeProfileID: current.claudeCodeProfileID,
+                structureProfileID: current.structureProfileID
+            )
         case .claudeCode:
-            updated = ActiveSelection(refineProfileID: current.refineProfileID, claudeCodeProfileID: id)
+            updated = ActiveSelection(
+                refineProfileID: current.refineProfileID,
+                claudeCodeProfileID: id,
+                structureProfileID: current.structureProfileID
+            )
+        case .structure:
+            updated = ActiveSelection(
+                refineProfileID: current.refineProfileID,
+                claudeCodeProfileID: current.claudeCodeProfileID,
+                structureProfileID: id
+            )
         }
         do {
             try store.saveActiveSelection(updated)
@@ -143,7 +159,10 @@ final class PromptStoreViewModel {
     /// Snapshot the current store state into a serializable bundle. Used by
     /// the export flow to write a JSON file via `PromptIO.encode`.
     func exportSnapshot() -> PromptBundle {
-        let allProfiles = (profilesByMode[.refine] ?? []) + (profilesByMode[.claudeCode] ?? [])
+        let allProfiles =
+            (profilesByMode[.refine] ?? [])
+            + (profilesByMode[.claudeCode] ?? [])
+            + (profilesByMode[.structure] ?? [])
         return PromptBundle(profiles: allProfiles, skills: skills)
     }
 

@@ -136,12 +136,44 @@ enum BuiltinPromptCatalog {
             description: "Polish mode: permits light written-form normalization while keeping content and register intact.",
             isBuiltin: true
         ),
+
+        // Structure mode shared skills — used by all 6 structure profiles.
+        PromptSkill(
+            id: "builtin-structure-output-zh",
+            name: "Structure output language (Chinese)",
+            category: .planning,
+            content: """
+                Output language: Traditional Chinese (zh-TW) with inline English identifiers preserved verbatim. \
+                Never translate to English. Use Markdown formatting with headings and bullet lists where appropriate.
+                """,
+            description: "Structure mode: enforce zh-TW output with Markdown structure.",
+            isBuiltin: true
+        ),
+        PromptSkill(
+            id: "builtin-structure-no-fabrication",
+            name: "No fabrication",
+            category: .planning,
+            content: """
+                Use ONLY information present in the input. \
+                Never invent facts, names, dates, numbers, or details that the speaker did not say. \
+                If a section of the template has no source material, leave it empty or write "（待補）". \
+                Better to have a sparse output than a fabricated one.
+                """,
+            description: "Structure mode: forbid hallucinating content not present in the spoken input.",
+            isBuiltin: true
+        ),
     ]
 
     static let profiles: [PromptProfile] = [
         defaultRefineProfile,
         defaultClaudeCodeProfile,
         polishZhProfile,
+        structureMeetingProfile,
+        structureTaskProfile,
+        structureRequirementProfile,
+        structureLetterProfile,
+        structureArticleProfile,
+        structureFallbackProfile,
     ]
 
     /// Default Refine profile: keeps few-shot examples + final closing in basePrompt;
@@ -276,6 +308,248 @@ enum BuiltinPromptCatalog {
             "builtin-style-preserve-identifiers",
         ],
         displayLabel: "Refining (Polish Chinese)",
+        createdAt: referenceDate,
+        updatedAt: referenceDate,
+        isBuiltin: true
+    )
+
+    // MARK: - Structure mode profiles
+    //
+    // Each profile takes a free-form spoken Chinese transcript and emits a
+    // template-shaped Markdown document. The router (StructureRouter) picks
+    // which profile to apply based on keyword hits in the input. All 6
+    // share the same `output-zh` and `no-fabrication` skills so their
+    // outputs stay grounded in what the speaker actually said.
+
+    static let structureMeetingProfile = PromptProfile(
+        id: "builtin-structure-meeting",
+        name: "Structure: Meeting notes",
+        mode: .structure,
+        basePrompt: """
+            /no_think You convert a spoken Chinese transcript of a meeting into structured meeting notes.
+
+            Output a Markdown document with these sections (omit a section only if there is genuinely no relevant content):
+
+            ## 摘要
+            （1-2 句濃縮整段討論的重點）
+
+            ## 決議
+            - （條列已經明確拍板的決定，沒有就略過此段）
+
+            ## 待辦
+            - [ ] （條列要做的事；若有負責人或時限請保留 — 沒有就只寫事項）
+
+            ## 其他重點
+            - （條列不屬於決議或待辦但值得記下的觀察）
+
+            Decision rule
+            - Stay in zh-TW. Inline English identifiers and tech names stay verbatim.
+            - Pull every concrete commitment into 待辦. Pull every confirmed decision into 決議.
+            - Never invent attendees, dates, or numbers. If unclear, leave blank.
+
+            Output ONLY the Markdown document — no preamble, no quotes.
+            """,
+        skillIDs: [
+            "builtin-structure-output-zh",
+            "builtin-structure-no-fabrication",
+            "builtin-drop-fillers",
+            "builtin-collapse-stutter",
+            "builtin-style-preserve-identifiers",
+        ],
+        displayLabel: "Structure (Meeting)",
+        createdAt: referenceDate,
+        updatedAt: referenceDate,
+        isBuiltin: true
+    )
+
+    static let structureTaskProfile = PromptProfile(
+        id: "builtin-structure-task",
+        name: "Structure: Task list",
+        mode: .structure,
+        basePrompt: """
+            /no_think You convert a spoken Chinese transcript of scattered thoughts into a structured task list.
+
+            Output a Markdown document with these sections:
+
+            ## 任務清單
+            - [ ] （每一項任務獨立一行，動詞開頭）
+
+            ## 下一步
+            - （挑出最該先動手的 1-3 件，按優先順序排列）
+
+            ## 待釐清
+            - （條列任何前提或細節需要先確認的事項；沒有就略過）
+
+            Decision rule
+            - Stay in zh-TW. Inline English identifiers and tech names stay verbatim.
+            - One action per bullet. Don't merge two actions into one bullet.
+            - Preserve speaker's specificity — don't generalize "改 A 那個 bug" into "修復 bug".
+            - Never invent tasks the speaker didn't mention.
+
+            Output ONLY the Markdown document — no preamble, no quotes.
+            """,
+        skillIDs: [
+            "builtin-structure-output-zh",
+            "builtin-structure-no-fabrication",
+            "builtin-drop-fillers",
+            "builtin-collapse-stutter",
+            "builtin-style-preserve-identifiers",
+        ],
+        displayLabel: "Structure (Tasks)",
+        createdAt: referenceDate,
+        updatedAt: referenceDate,
+        isBuiltin: true
+    )
+
+    static let structureRequirementProfile = PromptProfile(
+        id: "builtin-structure-requirement",
+        name: "Structure: Requirement draft",
+        mode: .structure,
+        basePrompt: """
+            /no_think You convert a spoken Chinese description of a customer or product requirement into a draft requirement document.
+
+            Output a Markdown document with these sections:
+
+            ## 背景
+            （1-2 句說明這個需求的來源或情境）
+
+            ## 需求重點
+            - （條列功能性需求；每一項用單句敘述）
+
+            ## 限制與假設
+            - （條列已知的限制、前提、或範圍邊界；沒有就略過）
+
+            ## 待確認事項
+            - [ ] （條列需要回頭跟提出者確認的細節）
+
+            Decision rule
+            - Stay in zh-TW. Inline English identifiers, product names, and tech names stay verbatim.
+            - 待確認事項要主動找：speaker 講得模糊的地方就列出來追問，不要自己腦補答案。
+            - Never invent stakeholders, deadlines, or technical decisions the speaker did not state.
+
+            Output ONLY the Markdown document — no preamble, no quotes.
+            """,
+        skillIDs: [
+            "builtin-structure-output-zh",
+            "builtin-structure-no-fabrication",
+            "builtin-drop-fillers",
+            "builtin-collapse-stutter",
+            "builtin-style-preserve-identifiers",
+        ],
+        displayLabel: "Structure (Requirement)",
+        createdAt: referenceDate,
+        updatedAt: referenceDate,
+        isBuiltin: true
+    )
+
+    static let structureLetterProfile = PromptProfile(
+        id: "builtin-structure-letter",
+        name: "Structure: Letter / Email",
+        mode: .structure,
+        basePrompt: """
+            /no_think You convert a spoken Chinese description of what to say into a polished email or letter draft.
+
+            Output a Markdown document with these sections:
+
+            ## 主旨
+            （簡短、具體；沒有指定就根據內容自己擬一個）
+
+            ## 內文
+            （以書面語撰寫，分段。保留 speaker 想傳達的所有重點，但去掉口語雜訊。語氣依 speaker 給的線索：朋友/客戶/同事，找不到線索就用中性禮貌語氣）
+
+            ## 附註
+            - （如果 speaker 提到要附件、要 cc、要追問什麼，列在這；沒有就略過）
+
+            Decision rule
+            - Stay in zh-TW. Inline English identifiers and proper nouns stay verbatim.
+            - 內文要完整成段、可以直接複製寄出，不要保留 "嗯" "那個" 這類口語雜質。
+            - Never invent recipients, dates, or commitments the speaker didn't mention.
+
+            Output ONLY the Markdown document — no preamble, no quotes.
+            """,
+        skillIDs: [
+            "builtin-structure-output-zh",
+            "builtin-structure-no-fabrication",
+            "builtin-drop-fillers",
+            "builtin-collapse-stutter",
+            "builtin-style-preserve-identifiers",
+        ],
+        displayLabel: "Structure (Letter)",
+        createdAt: referenceDate,
+        updatedAt: referenceDate,
+        isBuiltin: true
+    )
+
+    static let structureArticleProfile = PromptProfile(
+        id: "builtin-structure-article",
+        name: "Structure: Article / Note",
+        mode: .structure,
+        basePrompt: """
+            /no_think You convert a spoken Chinese transcript into a polished written article or work note.
+
+            Output a Markdown document with these sections:
+
+            ## 標題
+            （根據內容擬一個簡短標題）
+
+            ## 正文
+            （以書面語撰寫，按 speaker 的論述順序分段。保留所有觀點與例子，去掉口語雜訊與重複。每段落主題單一）
+
+            ## 重點摘要
+            - （條列 3-5 點，每點不超過 20 字）
+
+            Decision rule
+            - Stay in zh-TW. Inline English identifiers and tech names stay verbatim.
+            - 正文是 speaker 想法的書面版本，不是改寫成完全不同的文章。觀點、語氣、立場都要忠於原話。
+            - Never invent supporting examples or data the speaker did not mention.
+
+            Output ONLY the Markdown document — no preamble, no quotes.
+            """,
+        skillIDs: [
+            "builtin-structure-output-zh",
+            "builtin-structure-no-fabrication",
+            "builtin-drop-fillers",
+            "builtin-collapse-stutter",
+            "builtin-style-preserve-identifiers",
+        ],
+        displayLabel: "Structure (Article)",
+        createdAt: referenceDate,
+        updatedAt: referenceDate,
+        isBuiltin: true
+    )
+
+    /// Fallback profile used when StructureRouter cannot confidently classify
+    /// the input into a specific template. Behaves like a generic Polish ZH —
+    /// cleans up the transcript without imposing a structured template.
+    static let structureFallbackProfile = PromptProfile(
+        id: "builtin-structure-fallback",
+        name: "Structure: Fallback (general polish)",
+        mode: .structure,
+        basePrompt: """
+            /no_think You polish a spoken Chinese transcript into clean written Chinese.
+
+            The router could not confidently classify this input into a specific template (meeting / task / requirement / letter / article), so produce a generic polished version instead.
+
+            Output language: zh-TW. Inline English identifiers stay verbatim.
+
+            Decision rule
+            - Light spoken-to-written normalization (tighten redundant connectives, drop conversational scaffolding) only when it does not change meaning.
+            - Preserve every content word, identifier, and proper noun.
+            - Preserve the speaker's speech act (request stays request, description stays description, question stays question).
+            - When the speaker self-corrects, prefer the final form.
+
+            Output ONLY the polished text — no preamble, no quotes.
+            """,
+        skillIDs: [
+            "builtin-output-same-language",
+            "builtin-speech-act-zh",
+            "builtin-light-rewrite-zh",
+            "builtin-drop-fillers",
+            "builtin-collapse-stutter",
+            "builtin-recover-en-cn-homophones",
+            "builtin-style-preserve-identifiers",
+        ],
+        displayLabel: "Structure (Fallback)",
         createdAt: referenceDate,
         updatedAt: referenceDate,
         isBuiltin: true

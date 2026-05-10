@@ -5,8 +5,9 @@ final class BuiltinPromptCatalogTests: XCTestCase {
 
     // MARK: - Skills inventory
 
-    func testCatalogProvidesTenBuiltinSkills() {
-        XCTAssertEqual(BuiltinPromptCatalog.skills.count, 10)
+    func testCatalogProvidesTwelveBuiltinSkills() {
+        // 10 original + 2 structure-mode shared skills (output-zh, no-fabrication).
+        XCTAssertEqual(BuiltinPromptCatalog.skills.count, 12)
     }
 
     func testAllBuiltinSkillsHaveBuiltinFlag() {
@@ -38,6 +39,8 @@ final class BuiltinPromptCatalogTests: XCTestCase {
             "builtin-light-rewrite-zh",
             "builtin-style-preserve-identifiers",
             "builtin-output-english-only",
+            "builtin-structure-output-zh",
+            "builtin-structure-no-fabrication",
         ]
         let actualIDs = Set(BuiltinPromptCatalog.skills.map(\.id))
         XCTAssertEqual(actualIDs, expectedIDs)
@@ -55,6 +58,8 @@ final class BuiltinPromptCatalogTests: XCTestCase {
         XCTAssertEqual(map["builtin-recover-en-cn-homophones"], .recovery)
         XCTAssertEqual(map["builtin-speech-act-detection"], .speechAct)
         XCTAssertEqual(map["builtin-speech-act-zh"], .speechAct)
+        XCTAssertEqual(map["builtin-structure-output-zh"], .planning)
+        XCTAssertEqual(map["builtin-structure-no-fabrication"], .planning)
     }
 
     func testAllBuiltinSkillsHaveNonEmptyContent() {
@@ -68,8 +73,10 @@ final class BuiltinPromptCatalogTests: XCTestCase {
 
     // MARK: - Profiles
 
-    func testCatalogProvidesThreeBuiltinProfiles() {
-        XCTAssertEqual(BuiltinPromptCatalog.profiles.count, 3)
+    func testCatalogProvidesNineBuiltinProfiles() {
+        // 3 original + 6 structure-mode profiles
+        // (meeting/task/requirement/letter/article/fallback).
+        XCTAssertEqual(BuiltinPromptCatalog.profiles.count, 9)
     }
 
     func testBuiltinProfilesAreMarkedBuiltin() {
@@ -213,5 +220,77 @@ final class BuiltinPromptCatalogTests: XCTestCase {
         XCTAssertTrue(rendered.contains("Speech act") || rendered.contains("speech act"))
         XCTAssertTrue(rendered.contains("REQUEST") || rendered.contains("imperative"))
         XCTAssertTrue(rendered.contains("Output ONLY") || rendered.contains("ONLY the translation"))
+    }
+
+    // MARK: - Structure mode profiles
+
+    /// IDs for the 6 structure-mode builtin profiles. Kept as a static so other
+    /// test cases (migration, router) can reuse without duplicating literals.
+    private static let structureProfileIDs: [String] = [
+        "builtin-structure-meeting",
+        "builtin-structure-task",
+        "builtin-structure-requirement",
+        "builtin-structure-letter",
+        "builtin-structure-article",
+        "builtin-structure-fallback",
+    ]
+
+    func testAllStructureProfilesPresent() {
+        let actualIDs = Set(BuiltinPromptCatalog.profiles.map(\.id))
+        for id in Self.structureProfileIDs {
+            XCTAssertTrue(actualIDs.contains(id), "missing structure profile \(id)")
+        }
+    }
+
+    func testStructureProfilesUseStructureMode() {
+        for id in Self.structureProfileIDs {
+            let p = BuiltinPromptCatalog.profiles.first { $0.id == id }
+            XCTAssertEqual(p?.mode, .structure, "profile \(id) should use .structure mode")
+        }
+    }
+
+    func testStructureProfileSkillIDsResolveToBuiltinSkills() {
+        let skillIDSet = Set(BuiltinPromptCatalog.skills.map(\.id))
+        for id in Self.structureProfileIDs {
+            let p = BuiltinPromptCatalog.profiles.first { $0.id == id }!
+            for skillID in p.skillIDs {
+                XCTAssertTrue(
+                    skillIDSet.contains(skillID),
+                    "profile \(id) references unknown skill \(skillID)"
+                )
+            }
+        }
+    }
+
+    func testStructureProfilesRenderWithMarkdownStructure() {
+        // Each templated profile (meeting/task/requirement/letter/article)
+        // should produce a system prompt that explicitly mentions Markdown
+        // section headings — that's the contract with the LLM.
+        let templated = ["builtin-structure-meeting", "builtin-structure-task",
+                         "builtin-structure-requirement", "builtin-structure-letter",
+                         "builtin-structure-article"]
+        for id in templated {
+            let profile = BuiltinPromptCatalog.profiles.first { $0.id == id }!
+            let rendered = PromptComposer.render(profile: profile, skills: BuiltinPromptCatalog.skills)
+            XCTAssertTrue(rendered.contains("/no_think"), "\(id) must keep /no_think")
+            XCTAssertTrue(rendered.contains("##"), "\(id) must teach Markdown headings")
+            XCTAssertTrue(
+                rendered.contains("Output ONLY") || rendered.contains("Markdown"),
+                "\(id) must constrain output format"
+            )
+        }
+    }
+
+    func testStructureFallbackProfileBehavesLikePolish() {
+        // The fallback profile is what the router picks when no template
+        // keyword fires. It must NOT impose a Markdown template — it should
+        // behave like a generic polish, leaving the speaker's content shape
+        // intact.
+        let p = BuiltinPromptCatalog.profiles.first { $0.id == "builtin-structure-fallback" }!
+        XCTAssertTrue(p.skillIDs.contains("builtin-light-rewrite-zh"))
+        XCTAssertFalse(
+            p.basePrompt.contains("## 摘要") || p.basePrompt.contains("## 任務清單"),
+            "fallback profile must not embed a template structure"
+        )
     }
 }

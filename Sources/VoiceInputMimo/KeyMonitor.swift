@@ -3,12 +3,24 @@ import Cocoa
 final class KeyMonitor {
     var onFnDown: (() -> Void)?
     var onFnUp: (() -> Void)?
+    /// Fired when the user presses `fn + →`. macOS delivers this as End
+    /// keycode (119) with `.maskSecondaryFn` set. Used to cycle output mode
+    /// forward (raw → refine → claudeCode → structure → raw).
+    var onCycleNext: (() -> Void)?
+    /// Fired when the user presses `fn + ←`. macOS delivers this as Home
+    /// keycode (115) with `.maskSecondaryFn` set. Cycles output mode backward.
+    var onCyclePrev: (() -> Void)?
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var fnPressed = false
     private var activeKeyCode: Int64?
     private var cachedShortcuts: [ShortcutBinding]?
+
+    // fn+arrow keycodes on macOS — fn+← is Home, fn+→ is End. Both arrive
+    // with `.maskSecondaryFn` flag set on the keyDown event.
+    private static let homeKeyCode: Int64 = 115
+    private static let endKeyCode: Int64 = 119
 
     /// Drop the cached shortcut bindings. Call from Settings after the user
     /// changes a shortcut so the EventTap thread picks up the new binding on
@@ -103,6 +115,35 @@ final class KeyMonitor {
             } else if !fnDown && fnPressed {
                 fnPressed = false
                 DispatchQueue.main.async { [weak self] in self?.onFnUp?() }
+                return nil
+            }
+        }
+
+        // fn+arrow (Home/End with .maskSecondaryFn) cycles output mode.
+        // Intercept BEFORE the recording-shortcut match so this combo is
+        // never misread as a recording trigger.
+        //
+        // Guards:
+        //  - `activeKeyCode == nil` — non-fn shortcut not currently held (suppress
+        //    cycling while a recording is in progress)
+        //  - `!fnPressed` — fn-as-shortcut not currently held. NOTE: `fnPressed`
+        //    is only updated when fn is configured as a recording shortcut
+        //    (the flagsChanged branch above is gated on that). When the user
+        //    has a different shortcut (e.g. Ctrl+Opt+Space), holding fn for
+        //    typing then pressing arrow could trigger a cycle. This is a
+        //    minor UX quirk, not a correctness bug — the fix is to also
+        //    track fn modifier state independently of shortcut config, but
+        //    it's not worth the added complexity for v1.
+        //  - `.maskSecondaryFn` — the actual fn+arrow signature on macOS
+        if type == .keyDown, activeKeyCode == nil, !fnPressed,
+           event.flags.contains(.maskSecondaryFn) {
+            let kc = event.getIntegerValueField(.keyboardEventKeycode)
+            if kc == Self.homeKeyCode {
+                DispatchQueue.main.async { [weak self] in self?.onCyclePrev?() }
+                return nil
+            }
+            if kc == Self.endKeyCode {
+                DispatchQueue.main.async { [weak self] in self?.onCycleNext?() }
                 return nil
             }
         }

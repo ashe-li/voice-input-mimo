@@ -1,12 +1,7 @@
 import SwiftUI
 
-/// Phase 5 SwiftUI replacement for the AppKit clipboard history table. Used
-/// both standalone (via `ClipboardHistoryWindow`) and embedded inside the
-/// Settings History pane — same view, different host.
-///
-/// Layout:
-///   • Sidebar  : kind filter (All / Voice Sessions / Clipboard) + time bucket
-///   • Detail   : VSplitView — top = LazyVGrid of cards, bottom = full content
+/// Hosted both by `ClipboardHistoryWindow` (standalone) and by
+/// `HistoryPane` (Settings) — same view tree, different shell.
 struct ClipboardHistoryView: View {
     @State private var vm = ClipboardArchiveViewModel()
 
@@ -30,7 +25,7 @@ struct ClipboardHistoryView: View {
                 .help("Refresh")
 
                 Button {
-                    NSWorkspace.shared.activateFileViewerSelecting([ClipboardArchive.shared.archiveURL])
+                    NSWorkspace.shared.activateFileViewerSelecting([vm.archiveURL])
                 } label: {
                     Image(systemName: "folder")
                 }
@@ -190,7 +185,6 @@ struct ClipboardHistoryView: View {
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
                 }
-                .frame(maxWidth: .infinity, alignment: .leading)
                 if let err = vm.lastError {
                     Text(err).font(.caption).foregroundStyle(.red)
                 }

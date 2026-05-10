@@ -35,9 +35,9 @@ enum HistoryTimeBucket: String, CaseIterable, Sendable {
     }
 }
 
-/// Identifiable wrapper around `ClipboardArchive.Entry` so SwiftUI `List` /
-/// `LazyVGrid` selection has a stable id (timestamp+kind, since the archive
-/// itself is positional).
+/// Identifiable wrapper around `ClipboardArchive.Entry`. The id is derived
+/// from timestamp + kind + position so SwiftUI selection survives reload
+/// even though the archive itself is positional.
 struct HistoryEntryViewItem: Identifiable, Equatable, Sendable {
     let index: Int
     let timestamp: String
@@ -54,19 +54,22 @@ struct HistoryEntryViewItem: Identifiable, Equatable, Sendable {
         return String(oneLine.prefix(120))
     }
 
-    /// Pretty-printed clock label rendered on the card.
     var clockLabel: String {
-        let parser = ISO8601DateFormatter()
-        guard let date = parser.date(from: timestamp) else { return timestamp }
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX")
-        f.dateFormat = "MMM d, HH:mm:ss"
-        return f.string(from: date)
+        guard let date = Self.iso8601Parser.date(from: timestamp) else { return timestamp }
+        return Self.clockFormatter.string(from: date)
     }
 
     fileprivate func parsedDate() -> Date? {
-        ISO8601DateFormatter().date(from: timestamp)
+        Self.iso8601Parser.date(from: timestamp)
     }
+
+    private static let iso8601Parser = ISO8601DateFormatter()
+    private static let clockFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX")
+        f.dateFormat = "MMM d, HH:mm:ss"
+        return f
+    }()
 }
 
 /// Provider abstraction so the view model can be unit-tested with an
@@ -76,6 +79,7 @@ protocol ClipboardArchiveProviding: AnyObject {
     @discardableResult func restore(at index: Int) -> Bool
     @discardableResult func delete(at index: Int) -> Bool
     func clear()
+    var archiveURL: URL { get }
 }
 
 extension ClipboardArchive: ClipboardArchiveProviding {}
@@ -86,8 +90,12 @@ extension ClipboardArchive: ClipboardArchiveProviding {}
 @Observable
 final class ClipboardArchiveViewModel {
     private(set) var entries: [HistoryEntryViewItem] = []
-    var kindFilter: HistoryKindFilter = .all
-    var timeBucket: HistoryTimeBucket = .all
+    private(set) var filteredEntries: [HistoryEntryViewItem] = []
+    private(set) var kindCounts: [HistoryKindFilter: Int] = [:]
+    private(set) var bucketCounts: [HistoryTimeBucket: Int] = [:]
+
+    var kindFilter: HistoryKindFilter = .all { didSet { recomputeFiltered() } }
+    var timeBucket: HistoryTimeBucket = .all { didSet { recomputeFiltered() } }
     var selectedEntryID: String?
     private(set) var lastError: String?
 
@@ -97,55 +105,43 @@ final class ClipboardArchiveViewModel {
     /// Calendar used for the day-bucket comparison. Tests pin this to UTC so
     /// the same fixture timestamps land in deterministic buckets regardless
     /// of the host's timezone.
-    var calendar: Calendar = .current
+    var calendar: Calendar = .current { didSet { recomputeAll() } }
 
+    var archiveURL: URL { archive.archiveURL }
+
+    private var entryByID: [String: HistoryEntryViewItem] = [:]
     private let archive: any ClipboardArchiveProviding
 
     init(archive: any ClipboardArchiveProviding = ClipboardArchive.shared) {
         self.archive = archive
     }
 
-    /// Reload from the archive. Called from `.task {}` on appearance, after
-    /// restore/delete/clear, and on Refresh button.
     func reload() {
         let raw = archive.entries()
         entries = raw.enumerated().map { idx, e in
             HistoryEntryViewItem(index: idx, timestamp: e.timestamp, kind: e.kind, content: e.content)
         }
-        // Keep the selection valid if the underlying entry survived the reload.
-        if let id = selectedEntryID, !entries.contains(where: { $0.id == id }) {
-            selectedEntryID = entries.first?.id
+        entryByID = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) })
+        recomputeAll()
+        if let id = selectedEntryID, entryByID[id] == nil {
+            selectedEntryID = filteredEntries.first?.id
         } else if selectedEntryID == nil {
-            selectedEntryID = entries.first?.id
+            selectedEntryID = filteredEntries.first?.id
         }
         lastError = nil
     }
 
-    /// Filtered list view, applying kind + time bucket.
-    var filteredEntries: [HistoryEntryViewItem] {
-        entries.filter { matchesKind($0) && matchesBucket($0) }
-    }
-
-    /// Currently selected entry, or nil if selection got dropped.
     var selectedEntry: HistoryEntryViewItem? {
         guard let id = selectedEntryID else { return nil }
-        return entries.first { $0.id == id }
+        return entryByID[id]
     }
 
-    /// Per-bucket counts, used by the sidebar to show e.g. "Today (12)".
     func count(forBucket bucket: HistoryTimeBucket) -> Int {
-        switch bucket {
-        case .all: return entries.count
-        default: return entries.filter { matchesBucket($0, override: bucket) }.count
-        }
+        bucketCounts[bucket] ?? 0
     }
 
     func count(forKind kind: HistoryKindFilter) -> Int {
-        switch kind {
-        case .all: return entries.count
-        case .session: return entries.filter { $0.kind == .session }.count
-        case .clipboard: return entries.filter { $0.kind == .clipboard }.count
-        }
+        kindCounts[kind] ?? 0
     }
 
     // MARK: - Mutations
@@ -166,6 +162,40 @@ final class ClipboardArchiveViewModel {
         reload()
     }
 
+    // MARK: - Derivation
+
+    private func recomputeAll() {
+        recomputeFiltered()
+        recomputeCounts()
+    }
+
+    private func recomputeFiltered() {
+        filteredEntries = entries.filter { matchesKind($0) && matchesBucket($0) }
+        // If selection fell out of the filtered set, point at first visible.
+        if let id = selectedEntryID, !filteredEntries.contains(where: { $0.id == id }) {
+            selectedEntryID = filteredEntries.first?.id
+        }
+    }
+
+    private func recomputeCounts() {
+        var kc: [HistoryKindFilter: Int] = [.all: entries.count, .session: 0, .clipboard: 0]
+        var bc: [HistoryTimeBucket: Int] = [.all: entries.count, .today: 0, .yesterday: 0, .older: 0]
+        for item in entries {
+            switch item.kind {
+            case .session: kc[.session, default: 0] += 1
+            case .clipboard: kc[.clipboard, default: 0] += 1
+            }
+            switch dayBucket(for: item) {
+            case .today: bc[.today, default: 0] += 1
+            case .yesterday: bc[.yesterday, default: 0] += 1
+            case .older: bc[.older, default: 0] += 1
+            case .all: break
+            }
+        }
+        kindCounts = kc
+        bucketCounts = bc
+    }
+
     // MARK: - Filter helpers
 
     private func matchesKind(_ item: HistoryEntryViewItem) -> Bool {
@@ -176,21 +206,20 @@ final class ClipboardArchiveViewModel {
         }
     }
 
-    private func matchesBucket(_ item: HistoryEntryViewItem, override: HistoryTimeBucket? = nil) -> Bool {
-        let bucket = override ?? timeBucket
-        if bucket == .all { return true }
-        guard let date = item.parsedDate() else {
-            // Unparseable timestamps fall into "older" so they're still reachable.
-            return bucket == .older
-        }
+    private func matchesBucket(_ item: HistoryEntryViewItem) -> Bool {
+        timeBucket == .all || dayBucket(for: item) == timeBucket
+    }
+
+    /// Bucket for `item` against the injected clock + calendar. Unparseable
+    /// timestamps fall into `.older` so the entry stays reachable.
+    private func dayBucket(for item: HistoryEntryViewItem) -> HistoryTimeBucket {
+        guard let date = item.parsedDate() else { return .older }
         let nowDate = now()
-        if calendar.isDate(date, inSameDayAs: nowDate) {
-            return bucket == .today
-        }
+        if calendar.isDate(date, inSameDayAs: nowDate) { return .today }
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: nowDate),
            calendar.isDate(date, inSameDayAs: yesterday) {
-            return bucket == .yesterday
+            return .yesterday
         }
-        return bucket == .older
+        return .older
     }
 }

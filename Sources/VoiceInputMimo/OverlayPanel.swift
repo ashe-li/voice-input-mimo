@@ -6,7 +6,7 @@ final class OverlayPanel: NSPanel {
         case recording(elapsed: Double)
         case transcribing(elapsed: Double)
         case zhReady(zh: String)
-        case refining(zh: String, elapsed: Double, translating: Bool)
+        case refining(zh: String, elapsed: Double, translating: Bool, profileLabel: String?)
         case bothReady(zh: String, en: String)
         case error(String)
     }
@@ -111,9 +111,10 @@ final class OverlayPanel: NSPanel {
             present("Transcribing \(Self.formatElapsed(elapsed))", animating: true)
         case .zhReady(let zh):
             present("Chinese ready: \(Self.preview(zh))", animating: false)
-        case .refining(_, let elapsed, let translating):
-            let label = translating ? "Converting to English" : "Refining Chinese"
-            present("\(label) \(Self.formatElapsed(elapsed))", animating: true)
+        case .refining(_, let elapsed, let translating, let profileLabel):
+            let action = translating ? "Converting to English" : "Refining Chinese"
+            let suffix = (profileLabel?.isEmpty == false) ? " (\(profileLabel!))" : ""
+            present("\(action)\(suffix) \(Self.formatElapsed(elapsed))", animating: true)
         case .bothReady(let zh, let en):
             present("Ready: \(Self.preview(en.isEmpty ? zh : en))", animating: false)
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in

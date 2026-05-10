@@ -15,13 +15,15 @@ struct ClipboardHistoryView: View {
 
         VStack(spacing: 0) {
             inlineToolbar(vm: vm)
-            HSplitView {
+            HStack(spacing: 0) {
                 sidebar(vm: vm)
-                    .frame(minWidth: 180, idealWidth: 200, maxWidth: 280)
+                    .frame(width: 220)
+                Divider()
                 detailColumn(vm: vm)
-                    .frame(minWidth: 360)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task { vm.reload() }
     }
 

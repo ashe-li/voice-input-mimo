@@ -16,7 +16,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var englishOutputMenuItem: NSMenuItem!
     private var chineseOutputMenuItem: NSMenuItem!
     private var refinedChineseOutputMenuItem: NSMenuItem!
-    private var activeProfileMenuItem: NSMenuItem!
     private var asrServerMenuItem: NSMenuItem!
     private var asrServerStatusMenuItem: NSMenuItem!
     private lazy var settingsWindow = SettingsWindow()
@@ -417,7 +416,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         outputMenu.addItem(refinedChineseOutputMenuItem)
 
         englishOutputMenuItem = NSMenuItem(
-            title: "英文 Prompt（附回覆語言要求）",
+            title: "英文翻譯（附回覆語言要求）",
             action: #selector(selectEnglishOutputMode),
             keyEquivalent: "v"
         )
@@ -437,17 +436,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         outputModeMenuItem.submenu = outputMenu
         menu.addItem(outputModeMenuItem)
-
-        // "目前 Prompt" sits at top level, peer to "輸出模式". A second
-        // submenu nested *inside* "輸出模式" caused a 3-level deep hover chain
-        // that macOS handles unreliably (auto-open delays, sibling close
-        // races). Hoisting it makes mode-switch and profile-switch responsive.
-        // Title says "目前" not "啟用" because this is a *status indicator
-        // for the active profile*, not a separate enable switch — LLM
-        // enable is controlled by "輸出模式" above.
-        activeProfileMenuItem = NSMenuItem(title: "目前 Prompt", action: nil, keyEquivalent: "")
-        activeProfileMenuItem.submenu = NSMenu()
-        menu.addItem(activeProfileMenuItem)
 
         refreshOutputModeMenu()
 
@@ -588,89 +576,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refinedChineseOutputMenuItem.state = isRefinedChinese ? .on : .off
 
         if isEnglish {
-            outputModeMenuItem.title = "輸出模式：英文 Prompt"
+            outputModeMenuItem.title = "輸出模式：英文翻譯"
         } else if isRefinedChinese {
             outputModeMenuItem.title = "輸出模式：中文修正"
         } else {
             outputModeMenuItem.title = "輸出模式：中文 ASR"
         }
-        refreshActiveProfileMenu()
-    }
-
-    private func refreshActiveProfileMenu() {
-        guard let menu = activeProfileMenuItem?.submenu else { return }
-        menu.removeAllItems()
-        MainActor.assumeIsolated {
-            let vm = PromptStoreViewModel.shared
-            appendSection(into: menu, title: "Refine（中文修正）", mode: .refine, vm: vm)
-            menu.addItem(.separator())
-            appendSection(into: menu, title: "Claude Code（英文 Prompt）", mode: .claudeCode, vm: vm)
-            menu.addItem(.separator())
-            let editItem = NSMenuItem(title: "編輯 Profiles…", action: #selector(openSettings), keyEquivalent: "")
-            editItem.target = self
-            menu.addItem(editItem)
-        }
-
-        // Update the parent menu item's title to communicate which profile is
-        // *actually in play right now*. When LLM mode is disabled (Chinese-ASR
-        // raw output), profile selection has no effect — grey out the menu
-        // item entirely so the user can't second-guess whether picking a
-        // different profile here would change anything.
-        let refiner = LLMRefiner.shared
-        if !refiner.isEnabled {
-            activeProfileMenuItem.title = "目前 Prompt：—（中文 ASR 不經 LLM）"
-            activeProfileMenuItem.isEnabled = false
-        } else if refiner.claudeCodeModeEnabled {
-            let label = activeProfileLabel(for: .claudeCode) ?? "—"
-            activeProfileMenuItem.title = "目前 Prompt：\(label)"
-            activeProfileMenuItem.isEnabled = true
-        } else {
-            let label = activeProfileLabel(for: .refine) ?? "—"
-            activeProfileMenuItem.title = "目前 Prompt：\(label)"
-            activeProfileMenuItem.isEnabled = true
-        }
-    }
-
-    @MainActor
-    private func appendSection(
-        into menu: NSMenu,
-        title: String,
-        mode: RefineMode,
-        vm: PromptStoreViewModel
-    ) {
-        let header = NSMenuItem(title: title, action: nil, keyEquivalent: "")
-        header.isEnabled = false
-        menu.addItem(header)
-
-        let profiles = vm.profiles(for: mode)
-        if profiles.isEmpty {
-            let empty = NSMenuItem(title: "  （無 profile — 啟動仍在 bootstrap）", action: nil, keyEquivalent: "")
-            empty.isEnabled = false
-            menu.addItem(empty)
-            return
-        }
-        let activeID = vm.activeProfileID(for: mode)
-        for profile in profiles {
-            let item = NSMenuItem(
-                title: "  \(profile.name)",
-                action: #selector(selectProfileFromMenu(_:)),
-                keyEquivalent: ""
-            )
-            item.target = self
-            item.state = (profile.id == activeID) ? .on : .off
-            // Carry the (mode, profileID) tuple in a representedObject so the
-            // action can route without needing one selector per (mode, id).
-            item.representedObject = ProfileSelection(mode: mode, profileID: profile.id)
-            menu.addItem(item)
-        }
-    }
-
-    @objc private func selectProfileFromMenu(_ sender: NSMenuItem) {
-        guard let selection = sender.representedObject as? ProfileSelection else { return }
-        MainActor.assumeIsolated {
-            PromptStoreViewModel.shared.setActiveProfile(id: selection.profileID, mode: selection.mode)
-        }
-        refreshActiveProfileMenu()
     }
 
     @objc private func openSettings() {
@@ -802,9 +713,3 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
-/// Routed via NSMenuItem.representedObject so a single selector handles
-/// every (mode, profile) click.
-private struct ProfileSelection {
-    let mode: RefineMode
-    let profileID: String
-}

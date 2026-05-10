@@ -64,7 +64,12 @@ final class LLMRefiner {
         set { UserDefaults.standard.set(newValue, forKey: "claudeCodeSystemPrompt") }
     }
 
-    var isConfigured: Bool { !apiKey.isEmpty }
+    /// Local Rapid-MLX accepts any Bearer (including empty), so the gate only
+    /// checks the endpoint URL. A previous version required `apiKey` to be
+    /// non-empty, which silently dropped LLM calls when users left the field
+    /// blank — the recording would still go through, but the "English / Output"
+    /// pane echoed the Chinese ASR verbatim because the LLM path was skipped.
+    var isConfigured: Bool { !apiBaseURL.trimmingCharacters(in: .whitespaces).isEmpty }
 
     private var currentTask: URLSessionDataTask?
 

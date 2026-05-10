@@ -128,9 +128,11 @@ hdiutil create \
 # they stay in sync.
 # Parse the leaf Authority line. `sub(/^[^=]+=/, "")` strips only the first
 # `=`-prefix so cert CNs containing `=` (e.g. `CN=foo=bar`) survive intact.
-# The `exit` on first match takes the leaf cert (Authority lines are ordered
-# leaf → intermediate → root in `codesign -dvv` output).
-SIGN_IDENTITY="$(codesign -dvv "${APP_PATH}" 2>&1 | awk '/Authority=/ {sub(/^[^=]+=/, ""); print; exit}')"
+# Buffer codesign output to a variable (not piped directly to awk) — under
+# `set -o pipefail`, awk's early `exit` after first match would SIGPIPE the
+# upstream codesign and abort the whole script with exit 141.
+CODESIGN_OUT="$(codesign -dvv "${APP_PATH}" 2>&1 || true)"
+SIGN_IDENTITY="$(printf '%s\n' "${CODESIGN_OUT}" | awk '/Authority=/ {sub(/^[^=]+=/, ""); print; exit}')"
 SIGN_IDENTITY="${SIGN_IDENTITY:--}"
 
 if [ "${SIGN_IDENTITY}" != "-" ]; then

@@ -43,7 +43,15 @@ What NOT to do:
 If the input appears correct, return it exactly as-is. Return ONLY the text, nothing else.
 """
 
-_V1_STORE_BASE = """/no_think You clean up a noisy Chinese ASR transcript.
+_V1_STORE_BASE = """/no_think You are a high-precision cleanup pass for a noisy Chinese ASR transcript.
+
+Your job is to repair obvious recognition noise while preserving exactly what the speaker meant.
+
+Decision rule
+- Change text only when the corrected form is clearly more likely from local context.
+- If two readings are both plausible, keep the original wording.
+- Prefer the speaker's final correction over earlier partial words.
+- Remove accidental hesitation or immediate duplication, but keep deliberate emphasis.
 
 Examples
 Input: 嗯，打字真的蠻慢的，所以如果以後大家都假假定啊，大家都用語音輸入的話。
@@ -55,11 +63,11 @@ Output: 那目前大多數問題會是語音輸入的準確度。
 Input: 呃，創作者或或者使用者還可以決定我要不要用，比如說我們的，呃，skill。
 Output: 創作者或者使用者還可以決定我要不要用，比如說我們的 skill。
 
-Input: 呃，我的問題是，我遇到一個 bug。
-Output: 我的問題是，我遇到一個 bug。
+Input: 他會先顯示 raw 的字，之後再讓使用者決定要不要 refine。
+Output: 他會先顯示 raw 的字，之後再讓使用者決定要不要 refine。
 
-Input: 嗯，這個版本應該可以 work。
-Output: 這個版本應該可以 work。
+Input: 我想確認這個 A P I 是不是還有 bug。
+Output: 我想確認這個 API 是不是還有 bug。
 
 If the input already reads cleanly, return it exactly as-is. Output ONLY the cleaned text — no preamble, no quotes, no explanations."""
 
@@ -83,7 +91,15 @@ _V1_STORE_SKILLS = [
 PROMPT_V1_STORE = "\n\n".join([_V1_STORE_BASE.strip()] + _V1_STORE_SKILLS)
 
 
-PROMPT_V1 = """/no_think You clean up a noisy Chinese ASR transcript. Output the SAME LANGUAGE as input — never translate to English. Mixed Chinese/English must stay mixed.
+PROMPT_V1 = """/no_think You are a high-precision cleanup pass for a noisy Chinese ASR transcript. Output the SAME LANGUAGE as input — never translate to English. Mixed Chinese/English must stay mixed.
+
+Your job is to repair obvious recognition noise while preserving exactly what the speaker meant.
+
+Decision rule:
+- Change text only when the corrected form is clearly more likely from local context
+- If two readings are both plausible, keep the original wording
+- Prefer the speaker's final correction over earlier partial words
+- Remove accidental hesitation or immediate duplication, but keep deliberate emphasis
 
 Always fix:
 - Drop verbal fillers when they carry no meaning: 嗯, 呃, 啊, 欸, 那個, 就是說
@@ -111,11 +127,11 @@ Output: 那目前大多數問題會是語音輸入的準確度。
 Input: 呃，創作者或或者使用者還可以決定我要不要用，比如說我們的，呃，skill。
 Output: 創作者或者使用者還可以決定我要不要用，比如說我們的 skill。
 
-Input: 呃，我的問題是，我遇到一個 bug。
-Output: 我的問題是，我遇到一個 bug。
+Input: 他會先顯示 raw 的字，之後再讓使用者決定要不要 refine。
+Output: 他會先顯示 raw 的字，之後再讓使用者決定要不要 refine。
 
-Input: 嗯，這個版本應該可以 work。
-Output: 這個版本應該可以 work。
+Input: 我想確認這個 A P I 是不是還有 bug。
+Output: 我想確認這個 API 是不是還有 bug。
 
 If the input already reads cleanly, return it exactly as-is. Output ONLY the cleaned text — no preamble, no quotes, no explanations.
 """

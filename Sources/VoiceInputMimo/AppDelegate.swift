@@ -266,41 +266,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let refiner = LLMRefiner.shared
         if refiner.isEnabled && refiner.isConfigured {
-            // ZH-ready preview only when LLM stage is going to follow; ASR-only
-            // path skips this so we don't show "Chinese ready" then immediately
-            // "Ready" 0.6 s later.
-            overlayPanel.transition(to: .zhReady(zh: trimmed))
-            // Stage 2: LLM cleanup / translate. Hold ZH for ~0.4 s so user sees
-            // it clearly before the refining indicator appears — but only if
-            // the LLM is actually slower than 0.4 s. Cancel the deferred work
-            // when the result arrives early, otherwise we'd resurrect the
-            // overlay back into .refining and start a phase timer that nobody
-            // stops (orphan tick → "Refining 42.7s" stuck).
             refiningHoldWork?.cancel()
             let translating = refiner.claudeCodeModeEnabled
             let activeMode: RefineMode = translating ? .claudeCode : .refine
             let profileLabel = activeProfileLabel(for: activeMode)
-            let work = DispatchWorkItem { [weak self] in
-                guard let self else { return }
-                self.overlayPanel.transition(
+
+            if translating {
+                // Translation flow: show bare ZH single-line for the entire
+                // LLM latency. Waveform keeps animating to signal "still
+                // working". When EN arrives, transition once to dual-line
+                // (56→80 reflow happens exactly once). No intermediate
+                // "Converting…" status — that would add a second reflow.
+                overlayPanel.transition(to: .zhReady(zh: trimmed))
+            } else {
+                // LLM-Chinese refine: single-line "Refining Chinese …"
+                // status throughout. The final `.bothReady` surfaces the
+                // refined result. Skip zhReady — separate ZH preview adds
+                // latency without info on this path.
+                overlayPanel.transition(
                     to: .refining(
-                        zh: self.currentZH,
+                        zh: trimmed,
                         elapsed: 0,
-                        translating: translating,
+                        translating: false,
                         profileLabel: profileLabel
                     )
                 )
-                self.startPhaseTimer { [weak self] elapsed in
+                startPhaseTimer { [weak self] elapsed in
                     .refining(
                         zh: self?.currentZH ?? "",
                         elapsed: elapsed,
-                        translating: translating,
+                        translating: false,
                         profileLabel: profileLabel
                     )
                 }
             }
-            refiningHoldWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.4, execute: work)
 
             refiner.refine(trimmed, requestId: requestId) { [weak self] result in
                 guard let self else { return }

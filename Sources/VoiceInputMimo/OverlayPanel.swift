@@ -145,8 +145,16 @@ final class OverlayPanel: NSPanel {
         case .transcribing(let elapsed):
             presentSingle("Transcribing \(Self.formatElapsed(elapsed))", animating: true)
         case .zhReady(let zh):
-            presentSingle("Chinese ready: \(Self.preview(zh))", animating: false)
+            // Bare ZH preview, no label prefix. In the translation flow
+            // this stays visible for the entire LLM latency (waveform keeps
+            // animating to signal "still processing") — single → dual
+            // happens exactly once when EN arrives. AppDelegate skips this
+            // phase for LLM-Chinese and ASR-only paths.
+            presentSingle(Self.preview(zh), animating: true)
         case .refining(_, let elapsed, let translating, let profileLabel):
+            // Single-line status — used by the LLM-Chinese refine path.
+            // Translation flow does NOT route through here (it stays in
+            // .zhReady until .bothReady) to avoid an intermediate reflow.
             let action = translating ? "Converting to English" : "Refining Chinese"
             let suffix = profileLabel.flatMap { $0.isEmpty ? nil : " (\($0))" } ?? ""
             presentSingle("\(action)\(suffix) \(Self.formatElapsed(elapsed))", animating: true)
@@ -240,11 +248,11 @@ final class OverlayPanel: NSPanel {
         present(targetHeight: singleLineHeight, animateIn: !isVisible)
     }
 
-    private func presentDual(zh: String, en: String) {
+    private func presentDual(zh: String, en: String, animating: Bool = false) {
         contentModel.zh = zh
         contentModel.en = en
         contentModel.showZh = true
-        contentModel.animating = false
+        contentModel.animating = animating
         // VoiceOver: announce both lines together. SwiftUI
         // .accessibilityElement(children: .combine) collapses the two Text
         // views; the accessibilityLabel below is what VoiceOver reads.
@@ -357,6 +365,7 @@ extension OverlayPanel {
     var debug_zhText: String { contentModel.zh }
     var debug_enText: String { contentModel.en }
     var debug_zhHidden: Bool { !contentModel.showZh }
+    var debug_animating: Bool { contentModel.animating }
     var debug_hasPendingDismiss: Bool { pendingDismiss != nil }
     var debug_lastDismissDelay: TimeInterval { lastDismissDelay }
     var debug_isHovering: Bool { isHovering }

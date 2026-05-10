@@ -148,7 +148,7 @@ MIMO_PRELOAD=1 ./run.sh
 **Input / UI surface**
 - `KeyMonitor.swift`：CGEventTap，依 `ShortcutBinding` 同時監 Fn flagsChanged 與 modifier+keyDown 兩條路徑
 - `ShortcutBinding.swift`：5 個 preset（Disabled / Fn / Control + Option + Space / Control + Option + V / Command + Shift + Space），primary + secondary 各自綁，存於 UserDefaults
-- `OverlayPanel.swift` + `OverlayContentSwiftUI.swift`：`Phase` enum 驅動的單一 `transition(to:)` API，`.refining` 帶 optional `profileLabel` 顯示「Refining Chinese (Default Refine) 1.2s」；**SwiftUI hybrid** — NSPanel + NSVisualEffectView + CALayer 陰影留 AppKit（panel level `.popUpMenu`、Dock 避讓 96 px、NSTrackingArea hover-to-stay、`DispatchWorkItem` 自動消失），文字/波形 layout 走 `NSHostingView<OverlayLabelsView>` + `@Observable OverlayContentModel`；`.bothReady(zh:en:translating:)` 在 translating=true 且字串相異時顯示雙行 ZH+EN，相同則 collapse 單行
+- `OverlayPanel.swift` + `OverlayContentSwiftUI.swift`：`Phase` enum 驅動的單一 `transition(to:)` API，`.refining` 帶 optional `profileLabel` 顯示「Refining Chinese (Default Refine) 1.2s」；**SwiftUI hybrid** — NSPanel + NSVisualEffectView + CALayer 陰影留 AppKit（panel level `.popUpMenu`、Dock 避讓 96 px、NSTrackingArea hover-to-stay、`DispatchWorkItem` 自動消失），文字/波形 layout 走 `NSHostingView<OverlayLabelsView>` + `@Observable OverlayContentModel`；`.bothReady(zh:en:translating:)` 在 translating=true 且字串相異時顯示雙行 ZH+EN，相同則 collapse 單行。**Translation flow 走 single-reflow 契約**：`.zhReady` 渲染 bare ZH + animating waveform 表示 LLM 工作中，唯一一次 56→80 reflow 發生在 `.bothReady` 抵達；refine flow 反過來跳過 `.zhReady` 直接進 `.refining` 顯示「Refining Chinese …」單行狀態
 - `AppDelegate.swift`：狀態列選單 — 三段式輸出模式 + **「啟用 Profile」submenu**（兩區 Refine / Claude Code，逐 profile 顯示 ✓ + click 寫 active.json）+ Clipboard History（⌘⌥H）+ Model Memory（⌘⌥M）+ Preferences（⌘,）；啟動時跑 `PromptMigration.bootstrapIfNeeded()` 並 reload `PromptStoreViewModel.shared`
 
 **Settings — SwiftUI Hybrid（Phase 3 + 4）**
@@ -176,7 +176,7 @@ bundle id `com.shiun.VoiceInputMimo` 跟 Apple Speech 版（`voice-input-src`）
 ## Tests
 
 ```bash
-swift test            # 全部 unit test（143 個）
+swift test            # 全部 unit test（152 個）
 make e2e-phase1       # Phase 1 — Logic foundation gate（資料層 + bench harness）
 make e2e-phase2       # Phase 2 — UI 共用元件 + Sendable + @Observable VM
 make e2e-phase3       # Phase 3 — SettingsWindow refresh（thin shell + 7 panes）

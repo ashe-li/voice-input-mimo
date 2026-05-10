@@ -127,19 +127,48 @@ final class OverlayPanelTests: XCTestCase {
         XCTAssertNotEqual(firstDelay, 1.4, "sanity check different delays")
     }
 
-    /// Refining phase carries through the profileLabel suffix (translation
-    /// mode shows "Converting to English (Imported ClaudeCode)").
-    func testRefiningPhaseShowsProfileLabel() {
+    /// `.refining` is a single-line status frame in BOTH translating and
+    /// refine modes. The translation flow doesn't actually route through
+    /// here — it stays in `.zhReady` until `.bothReady` to keep total
+    /// reflows down to one (single 56 → dual 80). This test pins the
+    /// single-line contract so a future change can't silently re-introduce
+    /// an intermediate dual-line "Converting…" reflow.
+    func testRefiningStaysSingleLineInBothModes() {
         let panel = OverlayPanel()
+
         panel.transition(to: .refining(
-            zh: "x",
+            zh: "幫我翻成英文",
             elapsed: 1.5,
             translating: true,
             profileLabel: "Imported ClaudeCode"
         ))
-
-        XCTAssertTrue(panel.debug_zhHidden)
+        XCTAssertTrue(panel.debug_zhHidden, "translating refining: single-line")
         XCTAssertTrue(panel.debug_enText.contains("Converting to English"))
         XCTAssertTrue(panel.debug_enText.contains("Imported ClaudeCode"))
+
+        panel.transition(to: .refining(
+            zh: "再測試一下",
+            elapsed: 0.8,
+            translating: false,
+            profileLabel: "Default Refine"
+        ))
+        XCTAssertTrue(panel.debug_zhHidden, "refine-Chinese refining: single-line")
+        XCTAssertTrue(panel.debug_enText.contains("Refining Chinese"))
+        XCTAssertTrue(panel.debug_enText.contains("Default Refine"))
+    }
+
+    /// `.zhReady` renders bare ZH (no "Chinese ready:" prefix) and keeps
+    /// the waveform animating. The translation flow holds this state for
+    /// the entire LLM latency — animating waveform is the only "still
+    /// working" indicator (no separate "Converting…" status frame).
+    func testZhReadyShowsBareTextWithAnimatingWaveform() {
+        let panel = OverlayPanel()
+        panel.transition(to: .zhReady(zh: "幫我翻成英文"))
+
+        XCTAssertTrue(panel.debug_zhHidden, "zhReady is single-line")
+        XCTAssertEqual(panel.debug_enText, "幫我翻成英文",
+            "zhReady renders ZH text bare, no 'Chinese ready:' prefix")
+        XCTAssertTrue(panel.debug_animating,
+            "zhReady keeps waveform animating to signal LLM work in flight")
     }
 }

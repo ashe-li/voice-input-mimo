@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import SwiftUI
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
@@ -54,6 +55,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 // status bar item (which lives in SystemUIServer, not in
                 // this process's accessibility tree).
                 self?.openSettings()
+            }
+            return
+        }
+
+        // Standalone overlay-only preview for visual verification of the
+        // bothReady dual-line layout (zh top, en bottom) and hover-to-stay
+        // behaviour. Skips audio/keyboard wiring so the overlay can be
+        // captured by a screenshot script without a real recording. Uses a
+        // 1 s repeating transition to keep cancelling the auto-dismiss
+        // timer — overlay stays visible until the process is killed.
+        if ProcessInfo.processInfo.environment["VOICE_INPUT_MIMO_OVERLAY_DEMO"] == "swiftui" {
+            renderSwiftUIOverlayDemo()
+            return
+        }
+
+        if ProcessInfo.processInfo.environment["VOICE_INPUT_MIMO_OVERLAY_DEMO"] == "1" {
+            // Demo text via env vars (defaults to a long realistic sample so
+            // we can see truncation behaviour). Both ZH and EN can be
+            // overridden independently for visual testing.
+            let zhText = ProcessInfo.processInfo.environment["VOICE_INPUT_MIMO_OVERLAY_ZH"]
+                ?? "然後幫我給到一個設計，是我希望我的中文 LLM 修正以及英文翻譯，這兩個都可以是我可以 customize 我的 prompt"
+            let enText = ProcessInfo.processInfo.environment["VOICE_INPUT_MIMO_OVERLAY_EN"]
+                ?? "Then give me a design where I can customize the prompts for both my Chinese LLM refinement and English translation"
+            let phase = OverlayPanel.Phase.bothReady(
+                zh: zhText,
+                en: enText,
+                translating: true
+            )
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+                self?.overlayPanel.transition(to: phase)
+            }
+            Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
+                self?.overlayPanel.transition(to: phase)
+            }
+            // Self-snapshot to disk so a parent process without Screen
+            // Recording permission can still inspect the rendered overlay.
+            // Output path is overridable via VOICE_INPUT_MIMO_OVERLAY_OUT.
+            let out = ProcessInfo.processInfo.environment["VOICE_INPUT_MIMO_OVERLAY_OUT"]
+                ?? "/tmp/voice-input-mimo-overlay.png"
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) { [weak self] in
+                self?.snapshotOverlay(to: out)
             }
             return
         }
@@ -287,7 +329,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// LLM succeeded: show ZH + EN side-by-side for the linger window, then inject
     /// the English. Overlay handles dismissal internally after `overlayLingerSeconds`.
     private func completeWithEnglish(_ english: String) {
-        overlayPanel.transition(to: .bothReady(zh: currentZH, en: english))
+        let translating = LLMRefiner.shared.claudeCodeModeEnabled
+        overlayPanel.transition(to: .bothReady(zh: currentZH, en: english, translating: translating))
         ClipboardArchive.shared.saveSession(zh: currentZH, english: english)
         injectImmediately(english)
     }
@@ -296,7 +339,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// for a consistent visual; reuse zhReady (no EN row) for clarity.
     private func completeWithoutTranslation(_ text: String) {
         // Promote to bothReady with EN duplicated, so the linger countdown engages.
-        overlayPanel.transition(to: .bothReady(zh: text, en: text))
+        // translating=false: ASR-only path, overlay renders single line (no
+        // duplicate ZH/EN rows).
+        overlayPanel.transition(to: .bothReady(zh: text, en: text, translating: false))
         ClipboardArchive.shared.saveSession(zh: text, english: text)
         injectImmediately(text)
     }
@@ -581,6 +626,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             outputModeMenuItem.title = "輸出模式：中文修正"
         } else {
             outputModeMenuItem.title = "輸出模式：中文 ASR"
+        }
+    }
+
+    /// Host the SwiftUI `OverlayContentSwiftUI` view inside an NSHostingView,
+    /// add it to a borderless panel, render to PNG. Pure visual preview —
+    /// no behaviour, no lifecycle, just snapshot-then-quit.
+    private func renderSwiftUIOverlayDemo() {
+        // Variant: short / long. Selected via VOICE_INPUT_MIMO_OVERLAY_VAR.
+        // Direct env-var injection of CJK text via `open ... -e` corrupts the
+        // UTF-8 byte stream (mojibake) — bake the demo strings here instead.
+        let variant = ProcessInfo.processInfo.environment["VOICE_INPUT_MIMO_OVERLAY_VAR"] ?? "short"
+        let zhText: String
+        let enText: String
+        switch variant {
+        case "long":
+            zhText = "然後幫我給到一個設計,是我希望我的中文 LLM 修正以及英文翻譯,這兩個都可以是我可以 customize"
+            enText = "Then give me a design where I can customize the prompts for both my Chinese LLM refinement and English translation"
+        case "asr":
+            zhText = "再測試一下"
+            enText = "再測試一下"
+        default:
+            zhText = "幫我把 useState 改成 useReducer"
+            enText = "Refactor useState to useReducer"
+        }
+        let out = ProcessInfo.processInfo.environment["VOICE_INPUT_MIMO_OVERLAY_OUT"]
+            ?? "/tmp/voice-input-mimo-overlay-swiftui.png"
+
+        let host = NSHostingView(rootView:
+            OverlayContentSwiftUI(zh: zhText, en: enText, translating: true)
+                .frame(maxWidth: 640)
+                .fixedSize(horizontal: true, vertical: true)
+        )
+        host.frame = NSRect(x: 0, y: 0, width: 640, height: 100)
+        host.layoutSubtreeIfNeeded()
+        let fitting = host.fittingSize
+        host.frame = NSRect(origin: .zero, size: fitting)
+        host.layoutSubtreeIfNeeded()
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+            let bounds = host.bounds
+            guard let rep = host.bitmapImageRepForCachingDisplay(in: bounds) else { return }
+            host.cacheDisplay(in: bounds, to: rep)
+            guard let data = rep.representation(using: .png, properties: [:]) else { return }
+            try? data.write(to: URL(fileURLWithPath: out))
+            NSLog("[AppDelegate] SwiftUI overlay snapshot → %@ (%dx%d)", out, Int(fitting.width), Int(fitting.height))
+        }
+    }
+
+    /// Render the overlay panel's contentView to a PNG at the given path.
+    /// Used by OVERLAY_DEMO mode so a parent process without Screen Recording
+    /// permission can still see what the overlay renders. Self-snapshot uses
+    /// `cacheDisplay(in:to:)` which doesn't require any TCC permissions.
+    private func snapshotOverlay(to path: String) {
+        guard let cv = overlayPanel.contentView else { return }
+        let bounds = cv.bounds
+        guard let rep = cv.bitmapImageRepForCachingDisplay(in: bounds) else { return }
+        cv.cacheDisplay(in: bounds, to: rep)
+        guard let data = rep.representation(using: .png, properties: [:]) else { return }
+        let url = URL(fileURLWithPath: path)
+        do {
+            try data.write(to: url)
+            NSLog("[AppDelegate] overlay snapshot saved to %@ (%dx%d)", path, Int(bounds.width), Int(bounds.height))
+        } catch {
+            NSLog("[AppDelegate] overlay snapshot write failed: %@", error.localizedDescription)
         }
     }
 

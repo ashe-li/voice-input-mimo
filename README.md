@@ -171,7 +171,7 @@ MIMO_PRELOAD=1 ./run.sh
 - `VOICE_INPUT_MIMO_PREVIEW=1`：regular activation policy、自動開 Clipboard History + Model Memory 並注入 sample archive、跳過 LocalASRServer 啟動與終止 — bypass install + 重簽 + TCC re-grant tax
 - `VOICE_INPUT_MIMO_ARCHIVE_PATH=<path>`：把 clipboard archive 指向沙盒檔（preview / dev 用）
 
-bundle id `com.shiun.VoiceInputMimo` 跟 Apple Speech 版（`voice-input-src`）並存。`make install` 建置 + 安裝到 `/Applications/`。Phase 2 engine wire-up 切到 8766 / `engine.server:app` 走 UserDefaults 一次性 migration。
+bundle id `com.shiun.VoiceInputMimo` 跟 Apple Speech 版（`voice-input-src`）並存。`make install` 建置 + 安裝到 `/Applications/`。**`make cert-setup`**（一次性）建立本地 self-signed code-signing cert（`VoiceInputMimo Local`）→ rebuild 不再有 ad-hoc bundle hash drift，TCC（Microphone / Accessibility）權限跨 install 持續；未跑 `cert-setup` 時 `make build` fallback 為 `codesign --sign -` 並印警告。Phase 2 engine wire-up 切到 8766 / `engine.server:app` 走 UserDefaults 一次性 migration。
 
 ## Tests
 

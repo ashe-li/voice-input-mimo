@@ -1,92 +1,174 @@
 # voice-input-mimo
 
-獨立分支 — 改用 **MiMo-V2.5-ASR**（Xiaomi 開源、原生支援中英 code-switching）取代 Apple Speech 做語音辨識，搭配本地 LLM（**Rapid-MLX** 為主、LM Studio / ollama 等 OpenAI 相容後端皆可）做後處理。預設 LLM endpoint：`http://127.0.0.1:8082/v1`（Rapid-MLX）。
+按住 **Fn 鍵**講話 → 自動轉錄 + LLM 後處理 → 貼到游標位置。
 
-> **狀態**：Phase A（ASR server）+ Phase B（Swift app）+ Phase 2（adaptive idle ladder + Qwen cache manager + structured logging）皆已落地。
-> - 舊 `server/server.py` 仍在 repo（fixed idle）作為 baseline reference
-> - 新 engine 在本 repo 的 `engine/`，由 Swift app 預設啟動於 port 8766
-> - 不污染 `~/Documents/voice-input-src/`（Apple Speech 版繼續存在）
+跟一般語音輸入差別：
 
-## 為什麼需要這個分支
+- **ASR 用 [MiMo-V2.5-ASR](https://github.com/XiaomiMiMo/MiMo-V2.5)**（Xiaomi 開源）— 原生支援中英 code-switching，`LLM` / `API` / `React` / `component` 不會再被聽成「L M K」「A屁I」「瑞克特」「康波奶特」
+- **同一段口述輸入，可切 4 種輸出模式：**
+  - 中文 ASR 原文（最快，無 LLM 後處理）
+  - 中文 LLM 修正（去口語雜質、不改意思）
+  - 英文翻譯（口述中文 → 英文，給 Claude Code / Cursor 之類用）
+  - 中文 複合情境（依關鍵字自動分流到會議紀錄 / 任務清單 / 需求草稿 / 信件 / 文章 5 種模板）
+- **prompt 完全可客製化** — Settings → Prompts 自己編 Profile 和 Skill，不用改程式碼
 
-`voice-input-src` 用 Apple Speech zh-TW 做 STT，對中英混場景不行：
+---
 
-- Apple Speech 把英文縮寫聽成 ASCII 散字（`LLM` → `L M K`、`API` → `A屁I`）
-- 把英文詞音譯成中文（`Python` → `派森`、`React` → `瑞克特`、`component` → `康波奶特`）
-- LLM 後處理可救一些，但只用 4B 模型救不回大部分
+## ⚠️ 你需要準備的東西
 
-MiMo-V2.5-ASR 原生支援中英 code-switching（Xiaomi 訓練資料含大量混合語言），對開發者場景顯著好。
+這個 app 只是**前端**（錄音 + 貼上），它打兩個本機 service：
 
-代價：失去 streaming partial result（要錄完才轉），多一個 Python service 要管。
+| Service | 預設 endpoint | 你要先把它跑起來 |
+|---|---|---|
+| ASR engine（這個 repo 內附） | `http://127.0.0.1:8766` | `make server-start` 或 app 第一次啟動會自動 spawn |
+| LLM backend（任意 OpenAI-compatible） | `http://127.0.0.1:8082/v1` | 推薦 [Rapid-MLX](https://github.com/junkboy0315/rapid-mlx)；LM Studio / ollama / vLLM 也行 |
 
-## 架構
+第一次跑 ASR engine 會下載 ~4.5 GB 的 INT4 MLX model 到 `~/.cache/mimo-asr/`（之後 cache 住）。LLM model 自己挑，建議 Qwen3-8B 或同等級以上。
 
+---
+
+# 使用者文件
+
+## 安裝（macOS）
+
+> ⚠️ DMG 是 **self-signed**（沒做 Apple Notarization），第一次要手動繞過 Gatekeeper。
+
+從 [GitHub Releases](../../releases) 下載最新 `VoiceInputMimo-<版本>.dmg`，雙擊掛載：
+
+1. 把 `VoiceInputMimo.app` 拖到 `Applications`
+2. **第一次打開** — 右鍵 `VoiceInputMimo.app` → **打開** → 警告視窗按 **打開**
+   （或：系統設定 → 隱私權與安全性 → 滑到底找到被擋的訊息 → **仍要打開**）
+3. **授權** — app 會要兩個權限，都要給：
+   - **麥克風**（Microphone）— 用來錄音
+   - **輔助使用**（Accessibility）— 用來監聽 Fn 鍵
+4. （可選）**自動啟動** — 系統設定 → 一般 → 登入項目，把 VoiceInputMimo 加進去
+
+DMG 內附 `README-INSTALL.txt`（中英雙語）有同樣的步驟。
+
+## 操作
+
+### 錄音（基本流程）
+
+按住 **Fn 鍵** → 講話 → 放開 → app 把處理結果自動貼到游標所在位置。
+
+錄音中螢幕底部會出現一條 overlay 顯示狀態（Listening → Refining → 完成的中／英文預覽）。
+
+### 切換輸出模式
+
+四個模式擇一啟用，快慢／用途差很多：
+
+| 模式 | 速度 | 用途 |
+|---|---|---|
+| **中文 ASR 原文** | 最快（不打 LLM） | 即時筆記、純中文輸入 |
+| **中文 LLM 修正** | 快（小 LLM call） | 會議發言貼上、口齒不清的中文 cleanup |
+| **英文翻譯** | 中（一次 LLM call） | 給 Claude Code / Cursor / 英文 PR description |
+| **中文 複合情境** | 中～慢（template 較長） | 把口述展開成會議紀錄 / 任務清單 / 需求草稿 / 信件 / 文章 |
+
+兩種切換方式：
+
+- **快捷鍵**：`fn + →` / `fn + ←` 在 4 個模式間輪轉切換
+- **狀態列選單**：點選單列上的 mic 圖示 → **輸出模式** 子選單直接挑
+
+當前模式會顯示在 menu bar 圖示旁的標題（例：`輸出模式：英文翻譯`）。
+
+### 複合情境的自動路由
+
+選「中文 複合情境」後，[`StructureRouter`](Sources/VoiceInputMimo/Prompts/StructureRouter.swift) 會看 ASR 出來的中文內容裡有哪些關鍵字，自動選 template：
+
+| 你說了什麼 | 它選哪個 template |
+|---|---|
+| 「會議結論…」「行動項…」「下次開會…」 | meeting（會議紀錄） |
+| 「TODO…」「我要做…」「下週要…」 | task（任務清單） |
+| 「使用者要…」「需求是…」「驗收條件…」 | requirement（需求草稿） |
+| 「親愛的…」「Dear…」「敬上…」 | letter（信件） |
+| 一般敘事、發想、想法 | article / fallback |
+
+5 個模板都是 builtin profile，可以在 Settings → Prompts 改 prompt 或加自己的版本。沒匹配關鍵字會走 fallback 通用 polish。
+
+### Prompt 客製化
+
+`Settings → Prompts`：
+
+- **Profiles** — 三類（Refine / ClaudeCode / Structure）各自獨立，每類都可以新增/編輯
+- **Skills Library** — Profile 由 N 個 Skill compose 出來（例：`output-english-only` + `recover-en-cn-homophones` + `drop-fillers`）
+- **匯入/匯出** — JSON bundle，可以分享給隊友或備份
+
+12 個 builtin skills 不能改但可以複製，9 個 builtin profiles 同理。
+
+### 其他快捷鍵
+
+| 鍵 | 功能 |
+|---|---|
+| `fn`（按住） | 錄音 |
+| `fn + →` / `fn + ←` | 切換輸出模式 |
+| `⌘ + ,` | 開 Settings |
+| `⌘ + ⌥ + H` | Clipboard History（看歷次轉錄結果） |
+| `⌘ + ⌥ + M` | Model Memory monitor（看 ASR / LLM 模型 RSS） |
+
+錄音熱鍵可在 `Settings → Shortcuts` 改（5 個 preset：Disabled / Fn / Control+Option+Space / Control+Option+V / Command+Shift+Space），primary + secondary 兩條獨立綁定。
+
+---
+
+# 開發者文件
+
+## 系統需求
+
+- macOS 14+（Sonoma 以上）— 新版 SwiftUI Hybrid 用到 `@Observable` macro
+- Xcode 16+ 的 toolchain（`swift build`）
+- Python 3.12（給 ASR engine）
+- Apple Silicon 強烈推薦（MLX 跑得順）
+
+## 從原始碼 build
+
+```bash
+git clone https://github.com/ashe-li/voice-input-mimo.git
+cd voice-input-mimo
+
+make cert-setup     # 一次性，建立本地 self-signed code-signing cert
+                    # （讓 macOS TCC 跨 rebuild 記得權限）
+make build          # 編譯 + 簽名 → ./VoiceInputMimo.app
+make install        # 上面 + 複製到 /Applications/
+
+# ASR engine
+cd engine
+pip install -r requirements.txt   # 或 uv sync
+cd ..
+make server-start                 # 背景啟動 ASR engine on :8766
 ```
-~/Documents/voice-input-mimo/
-├── server/                      ← Phase A baseline（fixed idle，保留作對照）
-│   ├── server.py                FastAPI + Whisper-compat endpoint
-│   ├── pyproject.toml           uv-managed dependencies
-│   ├── run.sh                   啟動腳本
-│   ├── test_smoke.sh            curl 測試
-│   └── .venv/                   Python 3.12 venv
-├── engine/                      ← Phase 2 engine（預設啟動於 port 8766）
-│   ├── server.py                thin FastAPI shell
-│   ├── adaptive_idle.py         3/7/15 min idle ladder
-│   ├── lifecycle.py             LazyModel + cold/warm 管理
-│   ├── memory.py                MemoryTracker（vmmap snapshot TTL cache）
-│   ├── qwen_remote.py           Qwen cache poll manager
-│   └── logsetup.py              structured JSON log + X-Request-Id
-├── harness/                     ← bench harness + scenario fixtures
-├── fixtures/                    ← 測試音檔
-├── Sources/VoiceInputMimo/      ← Phase B Swift app（SwiftUI Hybrid）
-│   ├── Prompts/                 Profile/Skill 客製化系統 — JSON store + builtin catalog + import/export bundle
-│   ├── Settings/                SwiftUI Settings — RootView (NavigationSplitView) + 7 panes + Prompts/Skills sub-views
-│   ├── History/                 SwiftUI ClipboardHistoryView + ClipboardArchiveViewModel
-│   ├── UI/Components/           5 共用元件（HostingWindow / SectionHeading / CardModifier / SidebarSection / IconButton）
-│   ├── *Window.swift            thin NSWindow shells（Settings / ClipboardHistory / ModelMemory）+ AppDelegate / OverlayPanel
-│   └── Refining.swift, ASRClient.swift, ...   pipeline 主鏈
-├── Package.swift, Makefile, Info.plist
-├── Tests/VoiceInputMimoTests/   ← Swift unit tests（143 個）
-├── scripts/e2e/                 ← phase 1-6 acceptance gates
-└── plans/                       ← 設計與規劃 markdown
+
+`cert-setup` 完後**第一次** `make build` 會跳一個 SecurityAgent 對話框問「codesign 想用 private key」— 點 **Always Allow** 一次，後面 build/install/dmg 都靜默。沒跑 `cert-setup` 的話 `make build` 會 fallback 到 ad-hoc 簽（每次 install TCC 會 reset，不推薦）。
+
+## 打 release DMG
+
+```bash
+make dmg                         # 產 dist/VoiceInputMimo-<date>-<sha>.dmg
+VERSION=1.2.3 make dmg           # 自訂版本號
 ```
 
-Phase 2 engine（adaptive idle ladder 3/7/15 min + Qwen cache poll manager + 三層結構化 log + X-Request-Id end-to-end correlation）住在本 repo 的 `engine/`，Swift app `LocalASRServer.swift` 預設指向 `engine.server:app` + port 8766。
+DMG 自帶 Applications symlink（拖拉安裝）+ 雙語 README-INSTALL.txt。簽名沿用 `make build` 用的 cert，App + DMG 用同 identity 保持一致。
+
+> ⚠️ **這個 DMG 不是 Apple Notarized**。下載者第一次打開要右鍵 → 開啟。要做正式 Notarization 需要 Apple Developer ID（$99/year）— 等有 traction 再做。
 
 ## Server API
 
-OpenAI Whisper 相容：
+ASR engine 是 OpenAI Whisper-compatible：
 
 | Method | Path | 說明 |
 |---|---|---|
-| GET | `/v1/health` | 健康檢查 + 已 load model + OpenCC 設定 + zhtw rules 數 |
-| GET | `/v1/models` | 列出已掛載模型 |
-| POST | `/v1/audio/transcriptions` | 上傳音檔 → 文字 |
+| `GET` | `/v1/health` | 健康檢查 + loaded models + zhtw rules count |
+| `GET` | `/v1/models` | 列已掛載 models |
+| `POST` | `/v1/audio/transcriptions` | 上傳音檔 → 文字 |
+| `GET` | `/admin/memory` | 模型 RSS / Metal active / cache snapshot |
 
-POST 表單欄位（multipart）：
-- `file`（必填）：wav / aiff / mp3 etc.
-- `language`（選填）：`auto` / `zh` / `en`，預設 `auto`
-- `model`（選填）：相容性接受但忽略
-- `response_format`（選填）：`json`（預設）/ `text`
-- `output_locale`（選填）：`zh-TW`（預設）/ `none`
+`POST /v1/audio/transcriptions` multipart 欄位：
 
-## 簡體 → 繁體（兩段 post-process）
+- `file`（必填）— wav / aiff / mp3 等
+- `language`（可選）— `auto`（預設）/ `zh` / `en`
+- `response_format`（可選）— `json`（預設）/ `text`
+- `output_locale`（可選）— `zh-TW`（預設，做簡→繁 + IT 詞彙轉換）/ `none`
 
-MiMo-V2.5-ASR 訓練資料以簡體為主，輸出預設是簡體。本 server 預設套用兩段 post-process：
+回應範例：
 
-1. **OpenCC s2twp** — 廣域字元 + 一般詞彙轉換（软件→軟體、默认→預設、视频→影片、内存→記憶體）
-2. **zhtw-mcp ruleset**（[sysprog21/zhtw-mcp](https://github.com/sysprog21/zhtw-mcp)）— IT 領域專業術語替換（主線程→主執行緒、網關→閘道器、内核映象→核心映像檔）
-
-啟動時自動載入；無 OpenCC / 無 ruleset 時 silently fallback 為純 ASR 輸出。
-
-### 觀察輸出時 raw vs converted
-
-```bash
-curl -s -X POST http://127.0.0.1:8765/v1/audio/transcriptions \
-    -F file=@audio.wav -F language=auto | jq .
-```
-
-回應：
 ```json
 {
   "text": "幫我重構這個軟體的閘道器設定",
@@ -97,123 +179,84 @@ curl -s -X POST http://127.0.0.1:8765/v1/audio/transcriptions \
 }
 ```
 
-`raw_text` 只在 post-process 改變內容時才出現（節省 payload）。
+`raw_text` 只在 post-process 改變內容時才出現（簡→繁 / IT 詞彙轉換）。post-process 用 OpenCC `s2twp` + [sysprog21/zhtw-mcp](https://github.com/sysprog21/zhtw-mcp) ruleset。
 
-## 下載安裝（macOS）
+## 環境變數（ASR engine）
 
-> ⚠️ **這個 .dmg 是 self-signed，沒有經過 Apple Notarization**。第一次打開時 Gatekeeper 會擋下，需要手動繞過。詳見下方步驟，或下載後查看 DMG 內附的 `README-INSTALL.txt`。
-
-從 [GitHub Releases](../../releases) 下載最新的 `VoiceInputMimo-<version>.dmg`，雙擊掛載後：
-
-1. **拖** `VoiceInputMimo.app` **到** `Applications` **資料夾**
-2. **第一次打開**：右鍵點 `VoiceInputMimo.app` → 選「打開」→ 在警告視窗按「打開」（只需一次，之後雙擊就能用）
-   - 或進「系統設定 → 隱私權與安全性」→ 滑到底找到 VoiceInputMimo 被擋的訊息 → 按「仍要打開」
-3. **授權**：app 會要求麥克風 + 輔助使用權限，兩個都要給才能用 Fn 鍵錄音
-4. **依賴**：app 本身只是前端，**還需要在本機跑** ASR engine + OpenAI-compatible LLM backend（見下方「啟動」段落）
-
-### 自己 build DMG
-
-```bash
-make cert-setup     # 一次性，建立本地 self-signed cert（讓 TCC 權限跨 rebuild 持續）
-make dmg            # 產出 dist/VoiceInputMimo-<date>-<sha>.dmg
-```
-
-⚠️ `cert-setup` 完後第一次 `make build` 會跳一個 SecurityAgent 對話框問「codesign 想用 private key」— 點 **Always Allow** 一次，之後 build/dmg 都靜默。
-
-`VERSION=1.2.3 make dmg` 可以指定版本號當檔名 suffix（不指定就用 `<date>-<git-sha>`）。
-
-## 啟動
-
-```bash
-cd ~/Documents/voice-input-mimo/server
-
-# 第一次跑會下載 4.5 GB model（int4 MLX）到 ~/.cache/mimo-asr/
-MIMO_PRELOAD=1 ./run.sh
-```
-
-環境變數：
 | Var | 預設 | 說明 |
 |---|---|---|
-| `MIMO_PRECISION` | `int4` | 也可 `bf16`（品質微高、顯存翻倍） |
+| `MIMO_PRECISION` | `int4` | `bf16` 品質微高、顯存翻倍 |
 | `MIMO_MODEL_ROOT` | `~/.cache/mimo-asr` | 模型存放位置 |
-| `MIMO_PRELOAD` | `0` | `1` = 啟動時就 load（首次啟動較慢但首請求快） |
-| `PORT` | `8765` | HTTP port |
+| `MIMO_PRELOAD` | `0` | `1` = 啟動就 load（首次啟動慢但首請求快） |
 | `MIMO_DEFAULT_LANGUAGE` | `auto` | 缺省語言 hint |
+| `PORT` | `8766` | HTTP port（舊版是 8765，UserDefaults 一次性 migrate） |
 
-## Smoke test
+## 開發 / 預覽快速通道
+
+跳過 install + 重簽 + TCC re-grant：
 
 ```bash
-./test_smoke.sh
+VOICE_INPUT_MIMO_PREVIEW=1 swift run
 ```
 
-會用 macOS `say` 生成三段音檔（純中、中英混、技術術語），打 server 比對轉錄品質。
+開 regular activation policy、自動開 Clipboard History + Model Memory window 並注入 sample archive、跳過 LocalASRServer 啟動。改 SwiftUI view 用這個迭代最快。
 
-## Phase B Swift app（已完成）
+也可以用 `VOICE_INPUT_MIMO_ARCHIVE_PATH=<path>` 把 clipboard archive 指向沙盒檔，不污染正式資料。
 
-`Sources/VoiceInputMimo/` 完整 macOS LSUIElement app — **SwiftUI Hybrid 架構**：AppKit 殼（NSWindow / NSPanel / status menu）+ SwiftUI 內容（panes / cards / forms / overlay labels），透過 `NSHostingController` / `NSHostingView` 橋接：
+## 架構
 
-**Pipeline 主鏈**
-- `AudioRecorder.swift`：AVAudioEngine 錄 16 kHz mono PCM wav
-- `ASRClient.swift`：multipart POST → `/v1/audio/transcriptions`，X-Request-Id 自動 forward；`/admin/memory` 走 8s timeout（cold path 可超過 default 2s）
-- `LLMRefiner.swift`：英譯 / 繁中 cleanup / claudeCode mode（含 zh-TW suffix 注入）/ structure mode（透過 `StructureRouter` 依關鍵字選 template profile）；system prompt 走 PromptStore → UserDefaults → hardcoded 三層 fallback
-- `Refining.swift`：`Refining` protocol over `LLMRefiner` for SwiftUI VM injection
-- `Prompts/`：Prompt Profile + Skill 客製化系統（v1 完工，PR #4）
-  - `PromptProfile.swift`：Profile / Skill / SkillCategory / ActiveSelection（皆 `Sendable`）
-  - `PromptStore.swift` + `PromptStoreProviding.swift`：JSON CRUD（`~/Library/Application Support/VoiceInputMimo/prompts/`）+ atomic write，protocol DI for testability
-  - `PromptStoreViewModel.swift`：`@MainActor @Observable` adapter — Settings / status menu / overlay 共用
-  - `PromptComposer.swift`：append-mode rendering（v1.5 加 slot 模板）+ token estimate
-  - `BuiltinPromptCatalog.swift`：12 builtin skills + 9 default profiles（Default Refine / Default ClaudeCode / Polish (Chinese) / 6 個 Structure templates：meeting / task / requirement / letter / article / fallback）
-  - `StructureRouter.swift`：純 Swift keyword-scoring router — 把 ASR 中文輸入分流到對應的 structure template profile（v1 hardcoded 規則表，未匹配走 `builtin-structure-fallback` 通用 polish）
-  - `PromptMigration.swift`：first-launch bootstrap + 既有 UserDefaults override import
-  - `PromptIO.swift`：JSON bundle codec（`schemaVersion` + `PromptImportPlanner` pure-fn merge with replace/rename/skip strategies）
-- `LocalASRServer.swift`：supervise local engine（adopt 既有 / 自己 spawn），預設 module path = `engine.server:app`
-- `TextInjector.swift` / `RecordingArchive.swift`：貼上 + 錄音歸檔
+```
+voice-input-mimo/
+├── engine/                       ASR FastAPI（MiMo-V2.5 + adaptive idle ladder + Qwen cache poll）
+├── server/                       baseline 版（fixed idle，保留作對照）
+├── Sources/VoiceInputMimo/       Swift app（SwiftUI Hybrid：AppKit 殼 + SwiftUI 內容）
+│   ├── Prompts/                  Profile / Skill 系統 — JSON store + builtin catalog + import/export
+│   ├── Settings/                 NavigationSplitView + 7 panes（含 Prompts / History sub-views）
+│   ├── History/                  ClipboardHistoryView（單 List + Picker + detail strip）
+│   ├── UI/Components/            5 共用元件（HostingWindow / SectionHeading / CardModifier / ...）
+│   ├── *Window.swift             thin NSWindow shells（Settings / ClipboardHistory / ModelMemory）
+│   ├── AppDelegate.swift         status menu + 4-mode 切換 + fn-arrow cycle
+│   ├── KeyMonitor.swift          CGEventTap：Fn 錄音 + fn+← / fn+→ cycle
+│   ├── OverlayPanel.swift        + OverlayContentSwiftUI.swift — Phase enum 驅動的 overlay
+│   ├── LLMRefiner.swift          3-mode dispatch（refine / claudeCode / structure）
+│   └── Refining.swift, ASRClient.swift, AudioRecorder.swift, TextInjector.swift
+├── Tests/VoiceInputMimoTests/    177 個 unit test（資料層 + ViewModel 層；SwiftUI body 不寫 unit）
+├── scripts/e2e/                  acceptance gates
+└── plans/                        設計與規劃 markdown
+```
 
-**Input / UI surface**
-- `KeyMonitor.swift`：CGEventTap，依 `ShortcutBinding` 同時監 Fn flagsChanged 與 modifier+keyDown 兩條路徑
-- `ShortcutBinding.swift`：5 個 preset（Disabled / Fn / Control + Option + Space / Control + Option + V / Command + Shift + Space），primary + secondary 各自綁，存於 UserDefaults
-- `OverlayPanel.swift` + `OverlayContentSwiftUI.swift`：`Phase` enum 驅動的單一 `transition(to:)` API，`.refining` 帶 optional `profileLabel` 顯示「Refining Chinese (Default Refine) 1.2s」；**SwiftUI hybrid** — NSPanel + NSVisualEffectView + CALayer 陰影留 AppKit（panel level `.popUpMenu`、Dock 避讓 96 px、NSTrackingArea hover-to-stay、`DispatchWorkItem` 自動消失），文字/波形 layout 走 `NSHostingView<OverlayLabelsView>` + `@Observable OverlayContentModel`；`.bothReady(zh:en:translating:)` 在 translating=true 且字串相異時顯示雙行 ZH+EN，相同則 collapse 單行。**Translation flow 走 single-reflow 契約**：`.zhReady` 渲染 bare ZH + animating waveform 表示 LLM 工作中，唯一一次 56→80 reflow 發生在 `.bothReady` 抵達；refine flow 反過來跳過 `.zhReady` 直接進 `.refining` 顯示「Refining Chinese …」單行狀態
-- `AppDelegate.swift`：狀態列選單 — **四段式輸出模式**（中文 ASR 原文 / 中文 LLM 修正 / 英文翻譯 / 中文複合情境）+ **「啟用 Profile」submenu**（兩區 Refine / Claude Code，逐 profile 顯示 ✓ + click 寫 active.json）+ Clipboard History（⌘⌥H）+ Model Memory（⌘⌥M）+ Preferences（⌘,）；啟動時跑 `PromptMigration.bootstrapIfNeeded()` 並 reload `PromptStoreViewModel.shared`。**fn + ← / fn + →** 在四種輸出模式間輪轉切換（macOS 將 fn+arrow 送成 Home/End keycode + `.maskSecondaryFn`，由 `KeyMonitor` 截攔）
+**關鍵設計**：
 
-**Settings — SwiftUI Hybrid（Phase 3 + 4）**
-- `SettingsWindow.swift`：thin NSWindow 殼 + `NSHostingController(rootView: SettingsRootView())`（v1 之前 666 行 NSGridView，現 56 行）
-- `Settings/SettingsRootView.swift`：`NavigationSplitView` sidebar + 7 panes（General / Shortcuts / Speech / ASRServer / **Prompts** / **History** / About）
-- `Settings/Prompts/`：Prompts pane 完整生態
-  - `PromptsPaneViewModel.swift`：`@MainActor @Observable` — `paneMode`（profiles / skills）+ profile draft + test history + selectedSkillID
-  - `ProfileSidebar.swift` / `ProfileEditor.swift` / `PromptTestPanel.swift`：Profiles mode — `HStack(sidebar 240) + Divider + VStack(editor flex + Divider + test panel 280)`，**無 SplitView primitive**（避開 nested NavigationSplitView 寬度 collapse）
-  - `SkillSidebar.swift` / `SkillEditor.swift`：Skills Library mode — `HStack(sidebar 240) + Divider + editor flex`（builtin lock / 使用者 skill CRUD）
-  - `PromptImportExportAdapter.swift`：`@MainActor` AppKit adapter（NSSavePanel / NSOpenPanel）— AppKit isolated to Settings layer，data layer 純 Foundation
-
-**輔助 window**
-- `ClipboardHistoryWindow.swift`：thin NSWindow 殼（v1 之前 322 行 NSPanel + NSTableView，現 38 行）
-- `History/ClipboardHistoryView.swift`：SwiftUI 單 `List` + 頂部 segmented Picker（Kind / Time bucket）+ 底部固定高度 detail strip；**無 SplitView primitive**（NavigationSplitView/HSplitView/VSplitView 在 Settings → History 嵌套 context 都會 collapse 寬度，唯一可靠解是全砍）；同時被獨立 window 與 Settings → History pane 共用
-- `History/ClipboardArchiveViewModel.swift`：`@MainActor @Observable` — kind/time bucket filter，clock + calendar 注入給測試
-- `ClipboardArchive.swift`：每次完成 dictation 即透過 `saveSession(zh:english:)` 保留 ASR 原文 + 輸出，標記為 `EntryKind.session`；舊 clipboard snapshot 仍以 `EntryKind.clipboard` 存
-- `ModelMemoryWindow.swift` + `ModelMemoryMonitor.swift`：每 5s 輪詢 engine `/admin/memory` 與 LLM 後端（Rapid-MLX）`/v1/status`，顯示 Speech / LLM 模型 RSS / metal active / cache
-
-**開發 / 預覽**
-- `VOICE_INPUT_MIMO_PREVIEW=1`：regular activation policy、自動開 Clipboard History + Model Memory 並注入 sample archive、跳過 LocalASRServer 啟動與終止 — bypass install + 重簽 + TCC re-grant tax
-- `VOICE_INPUT_MIMO_ARCHIVE_PATH=<path>`：把 clipboard archive 指向沙盒檔（preview / dev 用）
-
-bundle id `com.shiun.VoiceInputMimo` 跟 Apple Speech 版（`voice-input-src`）並存。`make install` 建置 + 安裝到 `/Applications/`。**`make cert-setup`**（一次性）建立本地 self-signed code-signing cert（`VoiceInputMimo Local`）→ rebuild 不再有 ad-hoc bundle hash drift，TCC（Microphone / Accessibility）權限跨 install 持續；未跑 `cert-setup` 時 `make build` fallback 為 `codesign --sign -` 並印警告。Phase 2 engine wire-up 切到 8766 / `engine.server:app` 走 UserDefaults 一次性 migration。
+- **SwiftUI Hybrid** — Window/Panel/Status menu 留 AppKit（NSPanel `.popUpMenu` level、NSTrackingArea hover、CALayer 陰影），內容用 SwiftUI 寫（`@Observable` ViewModel + `NSHostingView` 橋接）。Settings / ClipboardHistory / Overlay 三個都是這個 pattern。
+- **Prompt 三層 fallback** — Profile（user）→ UserDefaults override → hardcoded builtin。任何一層 missing 都不會 crash。Profile 由 N 個 Skill compose（append-mode），每個 Skill 是 reusable text fragment。
+- **Structure router 純 Swift** — 不打 LLM 做 routing decision（節省一次 call）。每個 template 是獨立 profile，可單獨 tune。未來可換 LLM-based router 不破壞 profile 結構。
+- **`active.json` Codable migration** — 加新 RefineMode case 時舊 JSON 自動補預設值（custom `init(from:)` + `decodeIfPresent`）。
 
 ## Tests
 
 ```bash
-swift test            # 全部 unit test（177 個）
-make e2e-phase1       # Phase 1 — Logic foundation gate（資料層 + bench harness）
-make e2e-phase2       # Phase 2 — UI 共用元件 + Sendable + @Observable VM
-make e2e-phase3       # Phase 3 — SettingsWindow refresh（thin shell + 7 panes）
-make e2e-phase4       # Phase 4 — Prompts pane（profiles + skills library + import/export）
-make e2e-phase5       # Phase 5 — ClipboardHistory SwiftUI cards
-make e2e-phase6       # Phase 6 — startup wiring + status menu profile switcher（含 phase 1-5 chain re-run）
+swift test                       # 全部 unit（177 個）
+
+# E2E phase gates（依序跑，每個 pass 才能進下個）
+make e2e-phase1                  # 資料層 + bench harness
+make e2e-phase2                  # SwiftUI Hybrid 共用元件
+make e2e-phase3                  # SettingsWindow（thin shell + 7 panes）
+make e2e-phase4                  # Prompts pane（profiles + skills + import/export）
+make e2e-phase5                  # ClipboardHistory cards
+make e2e-phase6                  # 啟動 wiring + status menu profile switcher
 ```
 
-`Tests/VoiceInputMimoTests/` 涵蓋資料層（ShortcutBinding / ModelMemoryParser / ClipboardArchive / PromptProfile / PromptStore / PromptComposer / BuiltinPromptCatalog / PromptMigration / LLMRefinerPromptResolution / PromptIO）+ ViewModel 層（PromptStoreViewModel / SettingsViewModel / PromptsPaneViewModel / ClipboardArchiveViewModel）。SwiftUI view 本體不寫 unit test — 邏輯內聚於 `@Observable` ViewModel，view body 走 `#Preview` 開發迭代。
+`Tests/VoiceInputMimoTests/` 涵蓋：
 
-**E2E gate per phase**（branch `feat/prompt-profile-skill-system`，PR #4）：每個 phase 收尾跑 `scripts/e2e/phaseN_gate.sh` pass 才能進下個 phase。SwiftPM menubar app 沒 Xcode 專案 → 採 C+A 混合（side-effect 驗證 + osascript driver）。Phase 6 收尾 gate 含 phase 1-5 chain re-run，confirm 整合改動沒讓早期 invariant 退步。AppKit isolation 在 gate 用 `grep` 強制（Prompts/ + History/ 資料層禁 `import AppKit`）。詳見 `plans/active/prompt-profile-skill-system.md`「E2E Gate per Phase」段。
+- **資料層** — ShortcutBinding / ModelMemoryParser / ClipboardArchive / PromptProfile / PromptStore / PromptComposer / BuiltinPromptCatalog / PromptMigration / LLMRefinerPromptResolution / PromptIO / StructureRouter
+- **ViewModel** — PromptStoreViewModel / SettingsViewModel / PromptsPaneViewModel / ClipboardArchiveViewModel
+
+SwiftUI view body 本體不寫 unit test — 邏輯內聚於 `@Observable` ViewModel，view body 走 `#Preview` 開發迭代。SwiftPM menubar app 沒 Xcode 專案 → e2e gate 採 C+A 混合（side-effect 驗證 + osascript driver）。
 
 ## License
 
-服務端程式：MIT。
-模型權重：MiMo-V2.5-ASR (MIT)、carloshuang1224/MiMo-V2.5-ASR-MLX-INT4 (sub-license follows)。
+- App + server: MIT
+- 模型權重 — MiMo-V2.5-ASR (MIT)、carloshuang1224/MiMo-V2.5-ASR-MLX-INT4（sub-license follows）
+- 你選的 LLM backend 看你怎麼挑（建議 Qwen3 系列 / Llama 系列 / 任何 Apache-2.0 或 MIT 的開源 model）
+
+bundle id `com.shiun.VoiceInputMimo` 與 [Apple Speech 版（voice-input-src）](../voice-input-src) 並存可同時 install，TCC 各自獨立。

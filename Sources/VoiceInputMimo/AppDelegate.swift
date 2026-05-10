@@ -85,6 +85,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         keyMonitor.onFnDown = { [weak self] in self?.fnDown() }
         keyMonitor.onFnUp = { [weak self] in self?.fnUp() }
+        NotificationCenter.default.addObserver(
+            forName: .shortcutBindingDidChange, object: nil, queue: .main
+        ) { [weak self] _ in self?.keyMonitor.invalidateShortcutCache() }
 
         // Probe ASR server in the background to surface readiness in menu/log
         LocalASRServer.shared.onStateChange = { [weak self] _ in
@@ -395,15 +398,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         outputModeMenuItem = NSMenuItem(title: "輸出模式", action: nil, keyEquivalent: "")
         let outputMenu = NSMenu()
 
-        englishOutputMenuItem = NSMenuItem(
-            title: "英文 Prompt（附回覆語言要求）",
-            action: #selector(selectEnglishOutputMode),
-            keyEquivalent: "v"
-        )
-        englishOutputMenuItem.keyEquivalentModifierMask = [.command, .option]
-        englishOutputMenuItem.target = self
-        outputMenu.addItem(englishOutputMenuItem)
-
+        // Order: raw → refined → translated. Reflects increasing processing
+        // weight so the user reads the menu top-to-bottom as a ladder.
         chineseOutputMenuItem = NSMenuItem(
             title: "中文 ASR 原文（最快）",
             action: #selector(selectChineseOutputMode),
@@ -419,6 +415,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         refinedChineseOutputMenuItem.target = self
         outputMenu.addItem(refinedChineseOutputMenuItem)
+
+        englishOutputMenuItem = NSMenuItem(
+            title: "英文 Prompt（附回覆語言要求）",
+            action: #selector(selectEnglishOutputMode),
+            keyEquivalent: "v"
+        )
+        englishOutputMenuItem.keyEquivalentModifierMask = [.command, .option]
+        englishOutputMenuItem.target = self
+        outputMenu.addItem(englishOutputMenuItem)
 
         outputMenu.addItem(.separator())
 
@@ -604,9 +609,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         // Update the parent menu item's title with the active labels.
-        let refineActive = activeProfileLabel(for: .refine) ?? "—"
-        let claudeActive = activeProfileLabel(for: .claudeCode) ?? "—"
-        activeProfileMenuItem.title = "啟用 Profile：\(refineActive) / \(claudeActive)"
+        // Show only the profile for the *currently-active* mode. Listing both
+        // modes' profiles in one line ("Refine / ClaudeCode") makes the `/`
+        // separator ambiguous (looks like a path). Disabled-LLM mode (raw
+        // ASR) shows neither — there's no profile in that path.
+        let refiner = LLMRefiner.shared
+        if !refiner.isEnabled {
+            activeProfileMenuItem.title = "啟用 Profile：（停用 LLM 修正中）"
+        } else if refiner.claudeCodeModeEnabled {
+            let label = activeProfileLabel(for: .claudeCode) ?? "—"
+            activeProfileMenuItem.title = "啟用 Profile：\(label)（英文）"
+        } else {
+            let label = activeProfileLabel(for: .refine) ?? "—"
+            activeProfileMenuItem.title = "啟用 Profile：\(label)（中文修正）"
+        }
     }
 
     @MainActor

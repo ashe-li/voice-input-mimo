@@ -114,14 +114,18 @@ final class BuiltinPromptCatalogTests: XCTestCase {
     }
 
     func testDefaultClaudeCodeSkillOrderMatchesPlan() {
+        // `output-english-only` is FIRST so the LLM commits to translating
+        // before any cleanup-style skills (which mostly discuss preserving
+        // Chinese) drag it back into a "process this Chinese" mindset and
+        // skip translation. v1.0.2 regression fix.
         let p = BuiltinPromptCatalog.profiles.first { $0.id == "builtin-default-claude-code" }!
         XCTAssertEqual(p.skillIDs, [
+            "builtin-output-english-only",
             "builtin-speech-act-detection",
             "builtin-recover-en-cn-homophones",
             "builtin-drop-fillers",
             "builtin-collapse-stutter",
             "builtin-style-preserve-identifiers",
-            "builtin-output-english-only",
         ])
     }
 

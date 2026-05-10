@@ -8,6 +8,14 @@ final class KeyMonitor {
     private var runLoopSource: CFRunLoopSource?
     private var fnPressed = false
     private var activeKeyCode: Int64?
+    private var cachedShortcuts: [ShortcutBinding]?
+
+    /// Drop the cached shortcut bindings. Call from Settings after the user
+    /// changes a shortcut so the EventTap thread picks up the new binding on
+    /// its next event.
+    func invalidateShortcutCache() {
+        cachedShortcuts = nil
+    }
 
     /// Start monitoring. Returns false if accessibility permission is missing.
     func start() -> Bool {
@@ -72,7 +80,18 @@ final class KeyMonitor {
             return Unmanaged.passUnretained(event)
         }
 
-        let shortcuts = ShortcutBinding.loadAll()
+        // Cached shortcut snapshot. Re-loading from UserDefaults on every
+        // CGEvent (incl. flagsChanged that fires per modifier-key event) was
+        // pegging the EventTap thread enough to hit `tapDisabledByTimeout`
+        // during fast typing — the system would suspend the tap mid-recording
+        // and the Fn key-up event would be missed, leaving the app stuck in
+        // "Listening" forever. The cache is invalidated externally via
+        // `invalidateShortcutCache()` after a Settings save.
+        let shortcuts = cachedShortcuts ?? {
+            let s = ShortcutBinding.loadAll()
+            cachedShortcuts = s
+            return s
+        }()
 
         if type == .flagsChanged, shortcuts.contains(where: { $0.preset == .function }) {
             let flags = event.flags

@@ -13,9 +13,13 @@ struct PromptMigration {
     let hardcodedClaudeCodeDefault: String
 
     /// Run once on app launch. Idempotent — second call after the prompts/ tree
-    /// is established becomes a no-op.
+    /// is established becomes a no-op for the first-launch path, but always
+    /// re-overwrites builtin profiles/skills so existing installs pick up
+    /// shipped fixes (e.g. v1.0.2's reordered claude-code skills, prompt-v2
+    /// content updates) without having to wipe `~/Library/Application Support`.
     func bootstrapIfNeeded() throws -> PromptMigrationResult {
         if try store.loadActiveSelection() != nil {
+            try refreshBuiltins()
             return PromptMigrationResult(
                 didBootstrap: false,
                 importedRefineProfileID: nil,
@@ -54,6 +58,18 @@ struct PromptMigration {
             importedRefineProfileID: importedRefineID,
             importedClaudeCodeProfileID: importedClaudeCodeID
         )
+    }
+
+    /// Re-write builtin profiles/skills from the shipped catalog. User-created
+    /// profiles/skills are untouched. `active.json` is also untouched so the
+    /// user's chosen active profile sticks across upgrades.
+    private func refreshBuiltins() throws {
+        for skill in BuiltinPromptCatalog.skills {
+            try store.saveSkill(skill)
+        }
+        for profile in BuiltinPromptCatalog.profiles {
+            try store.saveProfile(profile)
+        }
     }
 
     private func importLegacyOverride(

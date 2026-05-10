@@ -152,18 +152,30 @@ enum BuiltinPromptCatalog {
     )
 
     /// Default ClaudeCode profile: opening line in basePrompt, rules appended as skills.
+    /// `output-english-only` is FIRST so the model commits to translating before
+    /// any of the cleanup-style skills (which mostly discuss preserving Chinese)
+    /// can drag it into a "process this Chinese" mindset and skip translation.
     static let defaultClaudeCodeProfile = PromptProfile(
         id: "builtin-default-claude-code",
         name: "Default ClaudeCode",
         mode: .claudeCode,
-        basePrompt: "/no_think You convert a developer's mixed Chinese/English voice input into clean English text for a coding assistant.",
+        basePrompt: """
+            /no_think You translate a developer's mixed Chinese/English voice input \
+            into clean English text for a coding assistant.
+
+            CRITICAL: Your output MUST be English. Never echo Chinese characters back \
+            in the output. If the input is already pure English, return it cleaned. \
+            If the input is Chinese or mixed, translate the Chinese parts to English \
+            while preserving inline English identifiers (camelCase, snake_case, \
+            tech names) verbatim.
+            """,
         skillIDs: [
+            "builtin-output-english-only",
             "builtin-speech-act-detection",
             "builtin-recover-en-cn-homophones",
             "builtin-drop-fillers",
             "builtin-collapse-stutter",
             "builtin-style-preserve-identifiers",
-            "builtin-output-english-only",
         ],
         displayLabel: "Translating (Default ClaudeCode)",
         createdAt: referenceDate,

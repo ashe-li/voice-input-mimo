@@ -73,6 +73,12 @@ struct ShortcutBinding: Equatable {
     }
 }
 
+extension Notification.Name {
+    /// Posted after `ShortcutBinding.save` so the KeyMonitor EventTap thread
+    /// can drop its cached snapshot.
+    static let shortcutBindingDidChange = Notification.Name("voiceInputMimo.shortcutBindingDidChange")
+}
+
 extension CGEventFlags {
     func containsAll(_ required: CGEventFlags) -> Bool {
         intersection(required) == required

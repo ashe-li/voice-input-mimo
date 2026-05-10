@@ -102,6 +102,8 @@ final class SettingsViewModel {
     /// thin shell's `windowWillClose`).
     func save() {
         ShortcutBinding.save(primary: primaryShortcut, secondary: secondaryShortcut)
+        // Notify EventTap thread to drop its cached shortcut snapshot.
+        NotificationCenter.default.post(name: .shortcutBindingDidChange, object: nil)
 
         let asr = ASRClient.shared
         asr.baseURL = asrBaseURL

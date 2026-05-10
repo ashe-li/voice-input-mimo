@@ -1,6 +1,14 @@
 import Foundation
 import Observation
 
+/// Top-level mode of the Prompts pane. `.profiles` shows the 3-column
+/// HSplitView (sidebar / editor / test). `.skills` shows the 2-column
+/// SkillSidebar / SkillEditor library view.
+enum PromptsPaneMode: String, CaseIterable, Sendable {
+    case profiles
+    case skills
+}
+
 /// MainActor-isolated view model for the Prompts pane (Phase 4). Holds the
 /// transient UI state that's local to the editor — currently selected mode
 /// and profile, draft of the profile being edited, test panel input/history,
@@ -8,7 +16,10 @@ import Observation
 @MainActor
 @Observable
 final class PromptsPaneViewModel {
-    // Sidebar selection
+    // Top-level pane mode (profiles vs skills library)
+    var paneMode: PromptsPaneMode = .profiles
+
+    // Sidebar selection (profiles mode)
     var selectedMode: RefineMode = .refine
     var selectedProfileID: String?
 
@@ -20,6 +31,10 @@ final class PromptsPaneViewModel {
     // Editor draft — set when sidebar selects a profile, mutated by
     // ProfileEditor, persisted via PromptStoreViewModel.saveProfile.
     var draft: PromptProfile?
+
+    // Skills library state (Phase 4B)
+    var selectedSkillID: String?
+    var skillDraft: PromptSkill?
 
     private let refiner: any Refining
     private let maxHistory: Int = 10
@@ -134,6 +149,60 @@ final class PromptsPaneViewModel {
 
     func clearHistory() {
         testHistory.removeAll()
+    }
+
+    // MARK: - Skills mode (Phase 4B)
+
+    /// Pick the first skill if no selection exists. Called from `.task {}` on
+    /// SkillSidebar and on store reload.
+    func ensureSkillSelection(from store: PromptStoreViewModel) {
+        let all = store.skills
+        if let id = selectedSkillID, all.contains(where: { $0.id == id }) {
+            return
+        }
+        if let first = all.first {
+            selectedSkillID = first.id
+            skillDraft = first
+        } else {
+            selectedSkillID = nil
+            skillDraft = nil
+        }
+    }
+
+    func selectSkill(_ skill: PromptSkill) {
+        selectedSkillID = skill.id
+        skillDraft = skill
+    }
+
+    /// Make a new empty user skill ready for editing. Caller must `saveSkill`
+    /// to persist; until then the new skill only lives in `skillDraft`.
+    func newSkillDraft() -> PromptSkill {
+        let skill = PromptSkill(
+            id: "user-\(UUID().uuidString.prefix(8))",
+            name: "New Skill",
+            category: .style,
+            content: "",
+            slot: nil,
+            description: nil,
+            isBuiltin: false
+        )
+        selectedSkillID = skill.id
+        skillDraft = skill
+        return skill
+    }
+
+    /// Build a non-builtin copy of `source`. UI persists via
+    /// `PromptStoreViewModel.saveSkill` so the catalog refreshes.
+    func makeSkillCopy(of source: PromptSkill) -> PromptSkill {
+        PromptSkill(
+            id: "user-\(UUID().uuidString.prefix(8))",
+            name: "\(source.name) Copy",
+            category: source.category,
+            content: source.content,
+            slot: source.slot,
+            description: source.description,
+            isBuiltin: false
+        )
     }
 }
 

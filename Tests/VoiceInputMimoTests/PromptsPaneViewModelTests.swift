@@ -117,6 +117,57 @@ final class PromptsPaneViewModelTests: XCTestCase {
         XCTAssertTrue(pane.testHistory.isEmpty)
     }
 
+    // MARK: - Skills mode (Phase 4B)
+
+    func test_initialState_paneModeIsProfiles() {
+        let pane = PromptsPaneViewModel(refiner: MockRefiner())
+        XCTAssertEqual(pane.paneMode, .profiles)
+        XCTAssertNil(pane.selectedSkillID)
+        XCTAssertNil(pane.skillDraft)
+    }
+
+    func test_ensureSkillSelection_picksFirst() async {
+        let storeVM = await fixturedStore()
+        let pane = PromptsPaneViewModel(refiner: MockRefiner())
+        pane.ensureSkillSelection(from: storeVM)
+        XCTAssertEqual(pane.selectedSkillID, "s1")
+        XCTAssertEqual(pane.skillDraft?.id, "s1")
+    }
+
+    func test_ensureSkillSelection_clears_whenNoSkills() {
+        let store = MockPromptStore()
+        let storeVM = PromptStoreViewModel(store: store)
+        let pane = PromptsPaneViewModel(refiner: MockRefiner())
+        pane.ensureSkillSelection(from: storeVM)
+        XCTAssertNil(pane.selectedSkillID)
+        XCTAssertNil(pane.skillDraft)
+    }
+
+    func test_newSkillDraft_returnsUserSkill_andSelectsIt() {
+        let pane = PromptsPaneViewModel(refiner: MockRefiner())
+        let s = pane.newSkillDraft()
+        XCTAssertTrue(s.id.hasPrefix("user-"))
+        XCTAssertFalse(s.isBuiltin)
+        XCTAssertEqual(pane.selectedSkillID, s.id)
+        XCTAssertEqual(pane.skillDraft?.id, s.id)
+    }
+
+    func test_makeSkillCopy_clearsBuiltinFlag_andRenames() {
+        let pane = PromptsPaneViewModel(refiner: MockRefiner())
+        let source = PromptSkill(
+            id: "builtin-x",
+            name: "Drop fillers",
+            category: .style,
+            content: "rules",
+            isBuiltin: true
+        )
+        let copy = pane.makeSkillCopy(of: source)
+        XCTAssertFalse(copy.isBuiltin)
+        XCTAssertNotEqual(copy.id, source.id)
+        XCTAssertEqual(copy.name, "Drop fillers Copy")
+        XCTAssertEqual(copy.content, source.content)
+    }
+
     // MARK: - Helpers
 
     private func fixturedStore() async -> PromptStoreViewModel {
@@ -176,5 +227,37 @@ final class PromptStoreViewModelMutationTests: XCTestCase {
         XCTAssertEqual(vm.skills.map(\.id), ["k"])
         vm.deleteSkill(id: "k")
         XCTAssertEqual(vm.skills.count, 0)
+    }
+
+    // MARK: - Export / Import (Phase 4B)
+
+    func test_exportSnapshot_collectsAllProfilesAndSkills() async {
+        let store = MockPromptStore()
+        store.refineProfiles = [
+            PromptProfile(id: "r1", name: "R", mode: .refine, basePrompt: "x", skillIDs: [], createdAt: Date(), updatedAt: Date())
+        ]
+        store.claudeCodeProfiles = [
+            PromptProfile(id: "c1", name: "C", mode: .claudeCode, basePrompt: "y", skillIDs: [], createdAt: Date(), updatedAt: Date())
+        ]
+        store.skills = [
+            PromptSkill(id: "s1", name: "S", category: .style, content: "c")
+        ]
+        let vm = PromptStoreViewModel(store: store)
+        await vm.reload()
+
+        let bundle = vm.exportSnapshot()
+        XCTAssertEqual(Set(bundle.profiles.map(\.id)), ["r1", "c1"])
+        XCTAssertEqual(bundle.skills.map(\.id), ["s1"])
+        XCTAssertEqual(bundle.schemaVersion, PromptBundle.currentSchemaVersion)
+    }
+
+    func test_applyImport_writesAndReloads() async {
+        let store = MockPromptStore()
+        let vm = PromptStoreViewModel(store: store)
+        let p = PromptProfile(id: "p-imp", name: "Imp", mode: .refine, basePrompt: "x", skillIDs: [], createdAt: Date(), updatedAt: Date())
+        let s = PromptSkill(id: "s-imp", name: "ImpS", category: .style, content: "c")
+        await vm.applyImport(profiles: [p], skills: [s])
+        XCTAssertEqual(vm.profiles(for: .refine).map(\.id), ["p-imp"])
+        XCTAssertEqual(vm.skills.map(\.id), ["s-imp"])
     }
 }

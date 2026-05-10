@@ -137,4 +137,34 @@ final class PromptStoreViewModel {
     func skill(id: String) -> PromptSkill? {
         skills.first { $0.id == id }
     }
+
+    // MARK: - Import / Export (Phase 4B)
+
+    /// Snapshot the current store state into a serializable bundle. Used by
+    /// the export flow to write a JSON file via `PromptIO.encode`.
+    func exportSnapshot() -> PromptBundle {
+        let allProfiles = (profilesByMode[.refine] ?? []) + (profilesByMode[.claudeCode] ?? [])
+        return PromptBundle(profiles: allProfiles, skills: skills)
+    }
+
+    /// Apply a planned set of profile + skill upserts to the store. Each
+    /// record is written via `saveProfile` / `saveSkill`, then `reload()` to
+    /// sync the cached state.
+    func applyImport(profiles: [PromptProfile], skills: [PromptSkill]) async {
+        for profile in profiles {
+            do {
+                try store.saveProfile(profile)
+            } catch {
+                lastError = error
+            }
+        }
+        for skill in skills {
+            do {
+                try store.saveSkill(skill)
+            } catch {
+                lastError = error
+            }
+        }
+        await reload()
+    }
 }

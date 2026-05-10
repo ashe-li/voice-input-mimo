@@ -6,6 +6,7 @@ private let logger = Logger(subsystem: "com.yetone.VoiceInput", category: "LLMRe
 enum RefineMode: String, Codable, Sendable {
     case refine        // Original: cleanup-only, keep language
     case claudeCode    // Cleanup + Chinese→English + append zh-TW suffix
+    case structure     // Auto-classify input → route to template profile (meeting/task/requirement/letter/article)
 }
 
 final class LLMRefiner {
@@ -33,7 +34,28 @@ final class LLMRefiner {
 
     var claudeCodeModeEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: "claudeCodeModeEnabled") }
-        set { UserDefaults.standard.set(newValue, forKey: "claudeCodeModeEnabled") }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "claudeCodeModeEnabled")
+            if newValue {
+                // Mutually exclusive with structure mode — clear the other flag
+                // so compound state can't end up in (claudeCode=true, structure=true).
+                UserDefaults.standard.set(false, forKey: "structureModeEnabled")
+            }
+        }
+    }
+
+    /// When true, refine() routes through `.structure` mode and uses
+    /// StructureRouter to pick a template profile based on input keywords.
+    /// Mutually exclusive with `claudeCodeModeEnabled` — turning either on
+    /// flips the other off.
+    var structureModeEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "structureModeEnabled") }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "structureModeEnabled")
+            if newValue {
+                UserDefaults.standard.set(false, forKey: "claudeCodeModeEnabled")
+            }
+        }
     }
 
     var claudeCodeSuffix: String {
@@ -97,13 +119,33 @@ final class LLMRefiner {
             return
         }
 
-        let resolvedMode = mode ?? (claudeCodeModeEnabled ? .claudeCode : .refine)
-        let activeProfile = (try? PromptStore.shared.activeProfile(for: resolvedMode)) ?? nil
-        let systemPrompt = Self.resolveSystemPrompt(
-            for: resolvedMode,
-            store: PromptStore.shared,
-            userDefaults: .standard
+        let resolvedMode = mode ?? Self.activeModeFromToggles(
+            claudeCodeEnabled: claudeCodeModeEnabled,
+            structureEnabled: structureModeEnabled
         )
+        // For .structure mode the active profile is picked by the router based
+        // on input content, not by ActiveSelection. For .refine / .claudeCode
+        // it stays the user's chosen active profile.
+        let activeProfile: PromptProfile?
+        let systemPrompt: String
+        if resolvedMode == .structure {
+            let routedID = StructureRouter.route(input: text)
+            let routed = (try? PromptStore.shared.loadProfile(id: routedID, mode: .structure)) ?? nil
+            activeProfile = routed
+            if let routed {
+                let skills = (try? PromptStore.shared.listSkills()) ?? []
+                systemPrompt = PromptComposer.render(profile: routed, skills: skills)
+            } else {
+                systemPrompt = Self.defaultRefinePrompt
+            }
+        } else {
+            activeProfile = (try? PromptStore.shared.activeProfile(for: resolvedMode)) ?? nil
+            systemPrompt = Self.resolveSystemPrompt(
+                for: resolvedMode,
+                store: PromptStore.shared,
+                userDefaults: .standard
+            )
+        }
 
         guard let url = URL(string: "\(normalizedBaseURL())/chat/completions") else {
             completion(.failure(RefinerError.invalidURL))
@@ -121,6 +163,11 @@ final class LLMRefiner {
 
         let resolvedModel = activeProfile?.modelOverride ?? model
         let resolvedTemp = activeProfile?.temperature ?? (resolvedMode == .claudeCode ? 0.2 : 0.3)
+        // Structure mode produces multi-section Markdown documents — ~1500
+        // gives room for ~1250 tokens of actual content after Qwen3 reasoning
+        // overhead. Refine/ClaudeCode keep the original 600 cap (single-line
+        // outputs).
+        let resolvedMaxTokens = resolvedMode == .structure ? 1500 : 600
 
         let body: [String: Any] = [
             "model": resolvedModel,
@@ -129,9 +176,7 @@ final class LLMRefiner {
                 ["role": "user", "content": text],
             ],
             "temperature": resolvedTemp,
-            // Qwen3 reasoning models burn ~250 tokens on internal thinking before
-            // producing the actual answer. 600 leaves room for ~350 tokens of answer.
-            "max_tokens": 600,
+            "max_tokens": resolvedMaxTokens,
         ]
 
         let logTag = requestId.isEmpty ? "" : "[req=\(requestId)] "
@@ -189,12 +234,32 @@ final class LLMRefiner {
         currentTask = nil
     }
 
+    // MARK: - Mode dispatch
+
+    /// Compute the effective `RefineMode` from the two compound toggles.
+    /// Precedence (highest first): structure > claudeCode > refine. Both
+    /// setters enforce mutual exclusion, but precedence here protects
+    /// against any external race that leaves both flags on.
+    static func activeModeFromToggles(claudeCodeEnabled: Bool, structureEnabled: Bool) -> RefineMode {
+        if structureEnabled { return .structure }
+        if claudeCodeEnabled { return .claudeCode }
+        return .refine
+    }
+
     // MARK: - System prompt resolution
 
     /// Resolve the system prompt with three-tier fallback:
     /// 1. PromptStore active profile rendered via PromptComposer (preferred)
     /// 2. UserDefaults legacy override (`refineSystemPrompt` / `claudeCodeSystemPrompt`)
     /// 3. Hardcoded compile-time default
+    ///
+    /// `.structure` mode is normally resolved inside `refine(_:requestId:mode:force:)`
+    /// via the `StructureRouter` path (not through this function). It is still
+    /// handled here defensively: there is no UserDefaults override key for
+    /// structure (router-driven), so tier 2 is skipped and tier 3 falls back
+    /// to the structure-fallback profile via the catalog. This way any future
+    /// caller that invokes `resolveSystemPrompt(for: .structure, …)` gets a
+    /// sensible result rather than the refine prompt.
     static func resolveSystemPrompt(
         for mode: RefineMode,
         store: PromptStore,
@@ -204,11 +269,26 @@ final class LLMRefiner {
             let skills = (try? store.listSkills()) ?? []
             return PromptComposer.render(profile: profile, skills: skills)
         }
-        let key = mode == .claudeCode ? "claudeCodeSystemPrompt" : "refineSystemPrompt"
-        if let custom = userDefaults.string(forKey: key), !custom.isEmpty {
-            return custom
+        switch mode {
+        case .claudeCode:
+            if let custom = userDefaults.string(forKey: "claudeCodeSystemPrompt"), !custom.isEmpty {
+                return custom
+            }
+            return Self.defaultClaudeCodePrompt
+        case .refine:
+            if let custom = userDefaults.string(forKey: "refineSystemPrompt"), !custom.isEmpty {
+                return custom
+            }
+            return Self.defaultRefinePrompt
+        case .structure:
+            // No UserDefaults override key for structure mode (router-driven).
+            // Tier 3 falls back to the catalog's structure-fallback profile.
+            let skills = (try? store.listSkills()) ?? []
+            return PromptComposer.render(
+                profile: BuiltinPromptCatalog.structureFallbackProfile,
+                skills: skills.isEmpty ? BuiltinPromptCatalog.skills : skills
+            )
         }
-        return mode == .claudeCode ? Self.defaultClaudeCodePrompt : Self.defaultRefinePrompt
     }
 
     // MARK: - Private helpers

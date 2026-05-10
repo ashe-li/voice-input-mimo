@@ -39,17 +39,20 @@ final class PromptMigrationTests: XCTestCase {
 
     // MARK: - Fresh bootstrap
 
-    func testFreshBootstrapWritesTenBuiltinSkills() throws {
+    func testFreshBootstrapWritesTwelveBuiltinSkills() throws {
         let result = try makeMigration().bootstrapIfNeeded()
         XCTAssertTrue(result.didBootstrap)
-        XCTAssertEqual(try store.listSkills().count, 10)
+        XCTAssertEqual(try store.listSkills().count, 12)
     }
 
-    func testFreshBootstrapWritesThreeBuiltinProfiles() throws {
+    func testFreshBootstrapWritesNineBuiltinProfiles() throws {
         _ = try makeMigration().bootstrapIfNeeded()
-        // Default Refine + Polish (Chinese) both live under .refine mode
+        // .refine: Default Refine + Polish ZH (2)
+        // .claudeCode: Default ClaudeCode (1)
+        // .structure: meeting/task/requirement/letter/article/fallback (6)
         XCTAssertEqual(try store.listProfiles(mode: .refine).count, 2)
         XCTAssertEqual(try store.listProfiles(mode: .claudeCode).count, 1)
+        XCTAssertEqual(try store.listProfiles(mode: .structure).count, 6)
     }
 
     func testFreshBootstrapWritesActiveSelectionPointingAtBuiltinDefaults() throws {
@@ -57,12 +60,31 @@ final class PromptMigrationTests: XCTestCase {
         let selection = try store.loadActiveSelection()
         XCTAssertEqual(selection?.refineProfileID, "builtin-default-refine")
         XCTAssertEqual(selection?.claudeCodeProfileID, "builtin-default-claude-code")
+        XCTAssertEqual(selection?.structureProfileID, "builtin-structure-fallback")
     }
 
     func testFreshBootstrapResolvesActiveProfileEndToEnd() throws {
         _ = try makeMigration().bootstrapIfNeeded()
         XCTAssertEqual(try store.activeProfile(for: .refine)?.id, "builtin-default-refine")
         XCTAssertEqual(try store.activeProfile(for: .claudeCode)?.id, "builtin-default-claude-code")
+        XCTAssertEqual(try store.activeProfile(for: .structure)?.id, "builtin-structure-fallback")
+    }
+
+    /// Legacy `active.json` written before the structure mode shipped only had
+    /// `refineProfileID` and `claudeCodeProfileID`. The Codable migration in
+    /// ActiveSelection must default the missing field to fallback so existing
+    /// installs decode without crash.
+    func testLegacyActiveSelectionDecodesWithDefaultStructureID() throws {
+        let legacyJSON = """
+            {
+                "refineProfileID": "builtin-default-refine",
+                "claudeCodeProfileID": "builtin-default-claude-code"
+            }
+            """.data(using: .utf8)!
+        let decoded = try JSONDecoder().decode(ActiveSelection.self, from: legacyJSON)
+        XCTAssertEqual(decoded.refineProfileID, "builtin-default-refine")
+        XCTAssertEqual(decoded.claudeCodeProfileID, "builtin-default-claude-code")
+        XCTAssertEqual(decoded.structureProfileID, ActiveSelection.defaultStructureProfileID)
     }
 
     // MARK: - Idempotency
@@ -74,8 +96,9 @@ final class PromptMigrationTests: XCTestCase {
 
         let second = try migration.bootstrapIfNeeded()
         XCTAssertFalse(second.didBootstrap, "second run must detect existing active.json and skip")
-        XCTAssertEqual(try store.listSkills().count, 10)
+        XCTAssertEqual(try store.listSkills().count, 12)
         XCTAssertEqual(try store.listProfiles(mode: .refine).count, 2)
+        XCTAssertEqual(try store.listProfiles(mode: .structure).count, 6)
     }
 
     // MARK: - UserDefaults import

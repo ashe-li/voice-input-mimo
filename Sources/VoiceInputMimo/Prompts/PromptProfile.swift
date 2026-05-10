@@ -6,6 +6,7 @@ enum SkillCategory: String, Codable, CaseIterable, Sendable {
     case format
     case domain
     case speechAct
+    case planning
 }
 
 struct PromptSkill: Codable, Identifiable, Equatable, Sendable {
@@ -82,12 +83,39 @@ struct PromptProfile: Codable, Identifiable, Equatable, Sendable {
     }
 }
 
+/// Active profile selection persisted at `~/Library/Application Support/VoiceInputMimo/prompts/active.json`.
+/// `structureProfileID` was added with the `.structure` mode; the custom decoder
+/// defaults missing values to the builtin fallback so existing installs keep
+/// decoding without a wipe.
 struct ActiveSelection: Codable, Equatable, Sendable {
     var refineProfileID: String
     var claudeCodeProfileID: String
+    var structureProfileID: String
 
-    init(refineProfileID: String, claudeCodeProfileID: String) {
+    static let defaultStructureProfileID = "builtin-structure-fallback"
+
+    init(
+        refineProfileID: String,
+        claudeCodeProfileID: String,
+        structureProfileID: String = ActiveSelection.defaultStructureProfileID
+    ) {
         self.refineProfileID = refineProfileID
         self.claudeCodeProfileID = claudeCodeProfileID
+        self.structureProfileID = structureProfileID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case refineProfileID
+        case claudeCodeProfileID
+        case structureProfileID
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.refineProfileID = try container.decode(String.self, forKey: .refineProfileID)
+        self.claudeCodeProfileID = try container.decode(String.self, forKey: .claudeCodeProfileID)
+        self.structureProfileID =
+            try container.decodeIfPresent(String.self, forKey: .structureProfileID)
+            ?? ActiveSelection.defaultStructureProfileID
     }
 }

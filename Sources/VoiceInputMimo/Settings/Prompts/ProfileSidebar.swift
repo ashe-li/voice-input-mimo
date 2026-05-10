@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Left column of the Prompts pane. Mode picker (refine / claudeCode) on top,
-/// then a `List` of profiles with an active dot for the currently active
+/// Left column of the Prompts pane. Mode picker (refine / claudeCode / structure)
+/// on top, then a `List` of profiles with an active dot for the currently active
 /// profile. Selection drives the middle column (ProfileEditor).
 struct ProfileSidebar: View {
     @Environment(PromptStoreViewModel.self) private var store
@@ -14,6 +14,7 @@ struct ProfileSidebar: View {
             Picker("Mode", selection: $pane.selectedMode) {
                 Text("Refine (zh)").tag(RefineMode.refine)
                 Text("Claude Code (en)").tag(RefineMode.claudeCode)
+                Text("Structure (zh)").tag(RefineMode.structure)
             }
             .pickerStyle(.segmented)
             .padding(.horizontal, 12)

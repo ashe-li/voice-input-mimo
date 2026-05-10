@@ -112,7 +112,10 @@ struct PromptsPane: View {
     private func runImport() {
         do {
             guard let bundle = try PromptImportExportAdapter.importBundle() else { return }
-            let existingProfiles = store.profiles(for: .refine) + store.profiles(for: .claudeCode)
+            let existingProfiles =
+                store.profiles(for: .refine)
+                + store.profiles(for: .claudeCode)
+                + store.profiles(for: .structure)
             let plan = PromptImportPlanner.plan(
                 incoming: bundle,
                 existingProfiles: existingProfiles,

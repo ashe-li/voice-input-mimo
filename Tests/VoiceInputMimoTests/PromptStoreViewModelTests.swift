@@ -103,6 +103,7 @@ final class PromptStoreViewModelTests: XCTestCase {
 final class MockPromptStore: PromptStoreProviding, @unchecked Sendable {
     var refineProfiles: [PromptProfile] = []
     var claudeCodeProfiles: [PromptProfile] = []
+    var structureProfiles: [PromptProfile] = []
     var skills: [PromptSkill] = []
     var activeSelection: ActiveSelection?
     var shouldThrowOnList: Bool = false
@@ -117,6 +118,9 @@ final class MockPromptStore: PromptStoreProviding, @unchecked Sendable {
         case .claudeCode:
             claudeCodeProfiles.removeAll { $0.id == profile.id }
             claudeCodeProfiles.append(profile)
+        case .structure:
+            structureProfiles.removeAll { $0.id == profile.id }
+            structureProfiles.append(profile)
         }
     }
 
@@ -129,6 +133,7 @@ final class MockPromptStore: PromptStoreProviding, @unchecked Sendable {
         switch mode {
         case .refine: return refineProfiles
         case .claudeCode: return claudeCodeProfiles
+        case .structure: return structureProfiles
         }
     }
 
@@ -136,6 +141,7 @@ final class MockPromptStore: PromptStoreProviding, @unchecked Sendable {
         switch mode {
         case .refine: refineProfiles.removeAll { $0.id == id }
         case .claudeCode: claudeCodeProfiles.removeAll { $0.id == id }
+        case .structure: structureProfiles.removeAll { $0.id == id }
         }
     }
 
@@ -167,7 +173,12 @@ final class MockPromptStore: PromptStoreProviding, @unchecked Sendable {
 
     func activeProfile(for mode: RefineMode) throws -> PromptProfile? {
         guard let sel = activeSelection else { return nil }
-        let id = mode == .refine ? sel.refineProfileID : sel.claudeCodeProfileID
+        let id: String
+        switch mode {
+        case .refine: id = sel.refineProfileID
+        case .claudeCode: id = sel.claudeCodeProfileID
+        case .structure: id = sel.structureProfileID
+        }
         return try loadProfile(id: id, mode: mode)
     }
 }

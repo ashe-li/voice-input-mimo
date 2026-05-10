@@ -153,14 +153,15 @@ MIMO_PRELOAD=1 ./run.sh
 **Pipeline 主鏈**
 - `AudioRecorder.swift`：AVAudioEngine 錄 16 kHz mono PCM wav
 - `ASRClient.swift`：multipart POST → `/v1/audio/transcriptions`，X-Request-Id 自動 forward；`/admin/memory` 走 8s timeout（cold path 可超過 default 2s）
-- `LLMRefiner.swift`：英譯 / 繁中 cleanup / claudeCode mode（含 zh-TW suffix 注入）；system prompt 走 PromptStore → UserDefaults → hardcoded 三層 fallback
+- `LLMRefiner.swift`：英譯 / 繁中 cleanup / claudeCode mode（含 zh-TW suffix 注入）/ structure mode（透過 `StructureRouter` 依關鍵字選 template profile）；system prompt 走 PromptStore → UserDefaults → hardcoded 三層 fallback
 - `Refining.swift`：`Refining` protocol over `LLMRefiner` for SwiftUI VM injection
 - `Prompts/`：Prompt Profile + Skill 客製化系統（v1 完工，PR #4）
   - `PromptProfile.swift`：Profile / Skill / SkillCategory / ActiveSelection（皆 `Sendable`）
   - `PromptStore.swift` + `PromptStoreProviding.swift`：JSON CRUD（`~/Library/Application Support/VoiceInputMimo/prompts/`）+ atomic write，protocol DI for testability
   - `PromptStoreViewModel.swift`：`@MainActor @Observable` adapter — Settings / status menu / overlay 共用
   - `PromptComposer.swift`：append-mode rendering（v1.5 加 slot 模板）+ token estimate
-  - `BuiltinPromptCatalog.swift`：10 builtin skills + 3 default profiles（Default Refine / Default ClaudeCode / Polish (Chinese)）
+  - `BuiltinPromptCatalog.swift`：12 builtin skills + 9 default profiles（Default Refine / Default ClaudeCode / Polish (Chinese) / 6 個 Structure templates：meeting / task / requirement / letter / article / fallback）
+  - `StructureRouter.swift`：純 Swift keyword-scoring router — 把 ASR 中文輸入分流到對應的 structure template profile（v1 hardcoded 規則表，未匹配走 `builtin-structure-fallback` 通用 polish）
   - `PromptMigration.swift`：first-launch bootstrap + 既有 UserDefaults override import
   - `PromptIO.swift`：JSON bundle codec（`schemaVersion` + `PromptImportPlanner` pure-fn merge with replace/rename/skip strategies）
 - `LocalASRServer.swift`：supervise local engine（adopt 既有 / 自己 spawn），預設 module path = `engine.server:app`
@@ -170,7 +171,7 @@ MIMO_PRELOAD=1 ./run.sh
 - `KeyMonitor.swift`：CGEventTap，依 `ShortcutBinding` 同時監 Fn flagsChanged 與 modifier+keyDown 兩條路徑
 - `ShortcutBinding.swift`：5 個 preset（Disabled / Fn / Control + Option + Space / Control + Option + V / Command + Shift + Space），primary + secondary 各自綁，存於 UserDefaults
 - `OverlayPanel.swift` + `OverlayContentSwiftUI.swift`：`Phase` enum 驅動的單一 `transition(to:)` API，`.refining` 帶 optional `profileLabel` 顯示「Refining Chinese (Default Refine) 1.2s」；**SwiftUI hybrid** — NSPanel + NSVisualEffectView + CALayer 陰影留 AppKit（panel level `.popUpMenu`、Dock 避讓 96 px、NSTrackingArea hover-to-stay、`DispatchWorkItem` 自動消失），文字/波形 layout 走 `NSHostingView<OverlayLabelsView>` + `@Observable OverlayContentModel`；`.bothReady(zh:en:translating:)` 在 translating=true 且字串相異時顯示雙行 ZH+EN，相同則 collapse 單行。**Translation flow 走 single-reflow 契約**：`.zhReady` 渲染 bare ZH + animating waveform 表示 LLM 工作中，唯一一次 56→80 reflow 發生在 `.bothReady` 抵達；refine flow 反過來跳過 `.zhReady` 直接進 `.refining` 顯示「Refining Chinese …」單行狀態
-- `AppDelegate.swift`：狀態列選單 — 三段式輸出模式 + **「啟用 Profile」submenu**（兩區 Refine / Claude Code，逐 profile 顯示 ✓ + click 寫 active.json）+ Clipboard History（⌘⌥H）+ Model Memory（⌘⌥M）+ Preferences（⌘,）；啟動時跑 `PromptMigration.bootstrapIfNeeded()` 並 reload `PromptStoreViewModel.shared`
+- `AppDelegate.swift`：狀態列選單 — **四段式輸出模式**（中文 ASR 原文 / 中文 LLM 修正 / 英文翻譯 / 中文複合情境）+ **「啟用 Profile」submenu**（兩區 Refine / Claude Code，逐 profile 顯示 ✓ + click 寫 active.json）+ Clipboard History（⌘⌥H）+ Model Memory（⌘⌥M）+ Preferences（⌘,）；啟動時跑 `PromptMigration.bootstrapIfNeeded()` 並 reload `PromptStoreViewModel.shared`。**fn + ← / fn + →** 在四種輸出模式間輪轉切換（macOS 將 fn+arrow 送成 Home/End keycode + `.maskSecondaryFn`，由 `KeyMonitor` 截攔）
 
 **Settings — SwiftUI Hybrid（Phase 3 + 4）**
 - `SettingsWindow.swift`：thin NSWindow 殼 + `NSHostingController(rootView: SettingsRootView())`（v1 之前 666 行 NSGridView，現 56 行）
@@ -197,7 +198,7 @@ bundle id `com.shiun.VoiceInputMimo` 跟 Apple Speech 版（`voice-input-src`）
 ## Tests
 
 ```bash
-swift test            # 全部 unit test（152 個）
+swift test            # 全部 unit test（177 個）
 make e2e-phase1       # Phase 1 — Logic foundation gate（資料層 + bench harness）
 make e2e-phase2       # Phase 2 — UI 共用元件 + Sendable + @Observable VM
 make e2e-phase3       # Phase 3 — SettingsWindow refresh（thin shell + 7 panes）

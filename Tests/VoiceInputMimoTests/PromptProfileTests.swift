@@ -11,10 +11,11 @@ final class PromptProfileTests: XCTestCase {
         XCTAssertEqual(SkillCategory.format.rawValue, "format")
         XCTAssertEqual(SkillCategory.domain.rawValue, "domain")
         XCTAssertEqual(SkillCategory.speechAct.rawValue, "speechAct")
+        XCTAssertEqual(SkillCategory.planning.rawValue, "planning")
     }
 
     func testSkillCategoryAllCasesIsExhaustive() {
-        XCTAssertEqual(SkillCategory.allCases.count, 5)
+        XCTAssertEqual(SkillCategory.allCases.count, 6)
     }
 
     func testSkillCategoryCodableRoundTrip() throws {
@@ -28,7 +29,7 @@ final class PromptProfileTests: XCTestCase {
     // MARK: - RefineMode (extended to Codable)
 
     func testRefineModeCodableRoundTrip() throws {
-        for mode in [RefineMode.refine, .claudeCode] {
+        for mode in [RefineMode.refine, .claudeCode, .structure] {
             let data = try JSONEncoder().encode(mode)
             let decoded = try JSONDecoder().decode(RefineMode.self, from: data)
             XCTAssertEqual(mode, decoded)

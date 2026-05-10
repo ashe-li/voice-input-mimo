@@ -438,11 +438,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         outputModeMenuItem.submenu = outputMenu
         menu.addItem(outputModeMenuItem)
 
-        // Active Profile menu sits at top level, peer to "輸出模式". A second
+        // "目前 Prompt" sits at top level, peer to "輸出模式". A second
         // submenu nested *inside* "輸出模式" caused a 3-level deep hover chain
         // that macOS handles unreliably (auto-open delays, sibling close
         // races). Hoisting it makes mode-switch and profile-switch responsive.
-        activeProfileMenuItem = NSMenuItem(title: "啟用 Profile", action: nil, keyEquivalent: "")
+        // Title says "目前" not "啟用" because this is a *status indicator
+        // for the active profile*, not a separate enable switch — LLM
+        // enable is controlled by "輸出模式" above.
+        activeProfileMenuItem = NSMenuItem(title: "目前 Prompt", action: nil, keyEquivalent: "")
         activeProfileMenuItem.submenu = NSMenu()
         menu.addItem(activeProfileMenuItem)
 
@@ -608,20 +611,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             menu.addItem(editItem)
         }
 
-        // Update the parent menu item's title with the active labels.
-        // Show only the profile for the *currently-active* mode. Listing both
-        // modes' profiles in one line ("Refine / ClaudeCode") makes the `/`
-        // separator ambiguous (looks like a path). Disabled-LLM mode (raw
-        // ASR) shows neither — there's no profile in that path.
+        // Update the parent menu item's title to communicate which profile is
+        // *actually in play right now*. When LLM mode is disabled (Chinese-ASR
+        // raw output), profile selection has no effect — grey out the menu
+        // item entirely so the user can't second-guess whether picking a
+        // different profile here would change anything.
         let refiner = LLMRefiner.shared
         if !refiner.isEnabled {
-            activeProfileMenuItem.title = "啟用 Profile：（停用 LLM 修正中）"
+            activeProfileMenuItem.title = "目前 Prompt：—（中文 ASR 不經 LLM）"
+            activeProfileMenuItem.isEnabled = false
         } else if refiner.claudeCodeModeEnabled {
             let label = activeProfileLabel(for: .claudeCode) ?? "—"
-            activeProfileMenuItem.title = "啟用 Profile：\(label)（英文）"
+            activeProfileMenuItem.title = "目前 Prompt：\(label)"
+            activeProfileMenuItem.isEnabled = true
         } else {
             let label = activeProfileLabel(for: .refine) ?? "—"
-            activeProfileMenuItem.title = "啟用 Profile：\(label)（中文修正）"
+            activeProfileMenuItem.title = "目前 Prompt：\(label)"
+            activeProfileMenuItem.isEnabled = true
         }
     }
 

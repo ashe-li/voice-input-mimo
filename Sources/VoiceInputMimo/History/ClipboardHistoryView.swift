@@ -1,46 +1,60 @@
 import SwiftUI
 
 /// Hosted both by `ClipboardHistoryWindow` (standalone) and by
-/// `HistoryPane` (Settings) — same view tree, different shell.
+/// `HistoryPane` (Settings) — same view tree, different shell. Uses
+/// `HSplitView` rather than `NavigationSplitView` because the Settings
+/// window already wraps everything in a NavigationSplitView (sidebar
+/// listing the panes), and macOS does not lay out nested
+/// NavigationSplitViews — the inner detail collapses to ~0 width and
+/// cards render as one-character-wide vertical strips.
 struct ClipboardHistoryView: View {
     @State private var vm = ClipboardArchiveViewModel()
 
     var body: some View {
         @Bindable var vm = vm
 
-        NavigationSplitView {
-            sidebar(vm: vm)
-                .navigationSplitViewColumnWidth(min: 180, ideal: 200, max: 260)
-        } detail: {
-            detailColumn(vm: vm)
-        }
-        .navigationTitle("Clipboard History")
-        .toolbar {
-            ToolbarItemGroup(placement: .primaryAction) {
-                Button {
-                    vm.reload()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .help("Refresh")
-
-                Button {
-                    NSWorkspace.shared.activateFileViewerSelecting([vm.archiveURL])
-                } label: {
-                    Image(systemName: "folder")
-                }
-                .help("Reveal archive in Finder")
-
-                Button(role: .destructive) {
-                    confirmClear(vm: vm)
-                } label: {
-                    Image(systemName: "trash")
-                }
-                .disabled(vm.entries.isEmpty)
-                .help("Clear all history")
+        VStack(spacing: 0) {
+            inlineToolbar(vm: vm)
+            HSplitView {
+                sidebar(vm: vm)
+                    .frame(minWidth: 180, idealWidth: 200, maxWidth: 280)
+                detailColumn(vm: vm)
+                    .frame(minWidth: 360)
             }
         }
         .task { vm.reload() }
+    }
+
+    @ViewBuilder
+    private func inlineToolbar(vm: ClipboardArchiveViewModel) -> some View {
+        HStack(spacing: 8) {
+            Text("Clipboard History").font(.headline)
+            Spacer()
+            Button {
+                vm.reload()
+            } label: {
+                Image(systemName: "arrow.clockwise")
+            }
+            .help("Refresh")
+
+            Button {
+                NSWorkspace.shared.activateFileViewerSelecting([vm.archiveURL])
+            } label: {
+                Image(systemName: "folder")
+            }
+            .help("Reveal archive in Finder")
+
+            Button(role: .destructive) {
+                confirmClear(vm: vm)
+            } label: {
+                Image(systemName: "trash")
+            }
+            .disabled(vm.entries.isEmpty)
+            .help("Clear all history")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        .background(.bar)
     }
 
     // MARK: - Sidebar

@@ -2,7 +2,7 @@ APP_NAME := VoiceInputMimo
 APP_BUNDLE := $(APP_NAME).app
 BUILD_DIR := $(shell swift build -c release --show-bin-path 2>/dev/null || echo .build/release)
 
-.PHONY: build clean install run server-start server-stop
+.PHONY: build clean install run server-start server-stop e2e-phase1 e2e-phase2 e2e-phase3 e2e-phase4 e2e-phase5 e2e-phase6
 
 build:
 	swift build -c release
@@ -35,3 +35,29 @@ server-start:
 
 server-stop:
 	@pkill -f 'uvicorn server:app' && echo "✅ Server stopped" || echo "ℹ️ Server not running"
+
+# Phase E2E acceptance gates. Each phase must pass its gate before moving on.
+# Phase 1 = data layer + LLMRefiner integration.
+# Phase 2 = SwiftUI Hybrid foundation (Sendable + protocols + ViewModel + 5 components).
+# Phase 3 = Settings AppKit form → SwiftUI panes (NavigationSplitView + 7 panes).
+# Phase 4 = Prompts pane (Profiles + Skills Library + Import/Export).
+# Phase 5 = ClipboardHistory SwiftUI cards (LazyVGrid + sidebar filter).
+# Phase 6 = startup wiring + status menu profile switcher + overlay label.
+
+e2e-phase1:
+	@bash scripts/e2e/phase1_gate.sh
+
+e2e-phase2:
+	@bash scripts/e2e/phase2_gate.sh
+
+e2e-phase3:
+	@bash scripts/e2e/phase3_gate.sh
+
+e2e-phase4:
+	@bash scripts/e2e/phase4_gate.sh
+
+e2e-phase5:
+	@bash scripts/e2e/phase5_gate.sh
+
+e2e-phase6:
+	@bash scripts/e2e/phase6_gate.sh

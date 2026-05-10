@@ -2,7 +2,7 @@ APP_NAME := VoiceInputMimo
 APP_BUNDLE := $(APP_NAME).app
 BUILD_DIR := $(shell swift build -c release --show-bin-path 2>/dev/null || echo .build/release)
 
-.PHONY: build clean install run server-start server-stop e2e-phase1 e2e-phase2 e2e-phase3 e2e-phase4 e2e-phase5
+.PHONY: build clean install run server-start server-stop e2e-phase1 e2e-phase2 e2e-phase3 e2e-phase4 e2e-phase5 e2e-phase6
 
 build:
 	swift build -c release
@@ -42,7 +42,7 @@ server-stop:
 # Phase 3 = Settings AppKit form → SwiftUI panes (NavigationSplitView + 7 panes).
 # Phase 4 = Prompts pane (Profiles + Skills Library + Import/Export).
 # Phase 5 = ClipboardHistory SwiftUI cards (LazyVGrid + sidebar filter).
-# Phase 6 gate will be added as that phase is implemented.
+# Phase 6 = startup wiring + status menu profile switcher + overlay label.
 
 e2e-phase1:
 	@bash scripts/e2e/phase1_gate.sh
@@ -58,3 +58,6 @@ e2e-phase4:
 
 e2e-phase5:
 	@bash scripts/e2e/phase5_gate.sh
+
+e2e-phase6:
+	@bash scripts/e2e/phase6_gate.sh

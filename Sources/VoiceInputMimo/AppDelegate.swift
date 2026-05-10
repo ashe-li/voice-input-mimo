@@ -16,6 +16,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var englishOutputMenuItem: NSMenuItem!
     private var chineseOutputMenuItem: NSMenuItem!
     private var refinedChineseOutputMenuItem: NSMenuItem!
+    private var activeProfileMenuItem: NSMenuItem!
     private var asrServerMenuItem: NSMenuItem!
     private var asrServerStatusMenuItem: NSMenuItem!
     private lazy var settingsWindow = SettingsWindow()
@@ -41,6 +42,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSLog("[AppDelegate] launch preview=%@", isPreviewMode ? "YES" : "NO")
         terminateConflictingApps()
+        bootstrapPromptStore()
         setupStatusBar()
 
         if ProcessInfo.processInfo.environment["VOICE_INPUT_MIMO_PREVIEW"] == "1" {
@@ -90,6 +92,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         LocalASRServer.shared.refresh { [weak self] _ in
             DispatchQueue.main.async { self?.refreshASRServerMenu() }
+        }
+    }
+
+    /// Phase 6 — bootstrap the prompt store on first launch and prime the
+    /// `@Observable` view model used by Settings + status menu. Idempotent:
+    /// once `prompts/active.json` exists `bootstrapIfNeeded` short-circuits.
+    private func bootstrapPromptStore() {
+        let migration = PromptMigration(
+            store: PromptStore.shared,
+            userDefaults: .standard,
+            hardcodedRefineDefault: LLMRefiner.defaultRefinePrompt,
+            hardcodedClaudeCodeDefault: LLMRefiner.defaultClaudeCodePrompt
+        )
+        do {
+            let result = try migration.bootstrapIfNeeded()
+            if result.didBootstrap {
+                NSLog(
+                    "[AppDelegate] prompts bootstrapped (importedRefine=%@ importedClaudeCode=%@)",
+                    result.importedRefineProfileID ?? "-",
+                    result.importedClaudeCodeProfileID ?? "-"
+                )
+            }
+        } catch {
+            NSLog("[AppDelegate] prompt bootstrap failed: %@", String(describing: error))
+        }
+        Task { @MainActor in
+            await PromptStoreViewModel.shared.reload()
+            self.refreshOutputModeMenu()
         }
     }
 
@@ -202,11 +232,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // stops (orphan tick → "Refining 42.7s" stuck).
             refiningHoldWork?.cancel()
             let translating = refiner.claudeCodeModeEnabled
+            let activeMode: RefineMode = translating ? .claudeCode : .refine
+            let profileLabel = activeProfileLabel(for: activeMode)
             let work = DispatchWorkItem { [weak self] in
                 guard let self else { return }
-                self.overlayPanel.transition(to: .refining(zh: self.currentZH, elapsed: 0, translating: translating))
+                self.overlayPanel.transition(
+                    to: .refining(
+                        zh: self.currentZH,
+                        elapsed: 0,
+                        translating: translating,
+                        profileLabel: profileLabel
+                    )
+                )
                 self.startPhaseTimer { [weak self] elapsed in
-                    .refining(zh: self?.currentZH ?? "", elapsed: elapsed, translating: translating)
+                    .refining(
+                        zh: self?.currentZH ?? "",
+                        elapsed: elapsed,
+                        translating: translating,
+                        profileLabel: profileLabel
+                    )
                 }
             }
             refiningHoldWork = work
@@ -377,6 +421,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         outputMenu.addItem(.separator())
 
+        // Phase 6 — Active Profile submenu (per-mode switcher)
+        activeProfileMenuItem = NSMenuItem(title: "啟用 Profile", action: nil, keyEquivalent: "")
+        activeProfileMenuItem.submenu = NSMenu()
+        outputMenu.addItem(activeProfileMenuItem)
+
+        outputMenu.addItem(.separator())
+
         let outputHelpItem = NSMenuItem(
             title: "每次 session 會保留 ASR 原文與貼上內容",
             action: nil,
@@ -501,6 +552,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshOutputModeMenu()
     }
 
+    /// Phase 6 — pick the user-visible label for the active profile of `mode`.
+    /// Falls back to `nil` when no profile is active, in which case the
+    /// overlay uses its plain "Refining Chinese" / "Converting to English"
+    /// text without parenthesised profile name.
+    ///
+    /// Bridged through `MainActor.assumeIsolated` because the Phase enum is
+    /// constructed on the main thread (DispatchWorkItem on `.main`) but the
+    /// surrounding AppDelegate isn't actor-isolated.
+    private func activeProfileLabel(for mode: RefineMode) -> String? {
+        MainActor.assumeIsolated {
+            let vm = PromptStoreViewModel.shared
+            guard let id = vm.activeProfileID(for: mode),
+                  let profile = vm.profiles(for: mode).first(where: { $0.id == id }) else {
+                return nil
+            }
+            if let label = profile.displayLabel, !label.isEmpty { return label }
+            return profile.name
+        }
+    }
+
     private func refreshOutputModeMenu() {
         let refiner = LLMRefiner.shared
         let isEnglish = refiner.isEnabled && refiner.claudeCodeModeEnabled
@@ -518,6 +589,73 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             outputModeMenuItem.title = "輸出模式：中文 ASR"
         }
+        refreshActiveProfileMenu()
+    }
+
+    /// Phase 6 — rebuild the "啟用 Profile" submenu from
+    /// `PromptStoreViewModel.shared`. Two sections (Refine / ClaudeCode) so
+    /// the user can pick the active profile per mode without leaving the
+    /// status menu.
+    private func refreshActiveProfileMenu() {
+        guard let menu = activeProfileMenuItem?.submenu else { return }
+        menu.removeAllItems()
+        MainActor.assumeIsolated {
+            let vm = PromptStoreViewModel.shared
+            appendSection(into: menu, title: "Refine（中文修正）", mode: .refine, vm: vm)
+            menu.addItem(.separator())
+            appendSection(into: menu, title: "Claude Code（英文 Prompt）", mode: .claudeCode, vm: vm)
+            menu.addItem(.separator())
+            let editItem = NSMenuItem(title: "編輯 Profiles…", action: #selector(openSettings), keyEquivalent: "")
+            editItem.target = self
+            menu.addItem(editItem)
+        }
+
+        // Update the parent menu item's title with the active labels.
+        let refineActive = activeProfileLabel(for: .refine) ?? "—"
+        let claudeActive = activeProfileLabel(for: .claudeCode) ?? "—"
+        activeProfileMenuItem.title = "啟用 Profile：\(refineActive) / \(claudeActive)"
+    }
+
+    @MainActor
+    private func appendSection(
+        into menu: NSMenu,
+        title: String,
+        mode: RefineMode,
+        vm: PromptStoreViewModel
+    ) {
+        let header = NSMenuItem(title: title, action: nil, keyEquivalent: "")
+        header.isEnabled = false
+        menu.addItem(header)
+
+        let profiles = vm.profiles(for: mode)
+        if profiles.isEmpty {
+            let empty = NSMenuItem(title: "  （無 profile — 啟動仍在 bootstrap）", action: nil, keyEquivalent: "")
+            empty.isEnabled = false
+            menu.addItem(empty)
+            return
+        }
+        let activeID = vm.activeProfileID(for: mode)
+        for profile in profiles {
+            let item = NSMenuItem(
+                title: "  \(profile.name)",
+                action: #selector(selectProfileFromMenu(_:)),
+                keyEquivalent: ""
+            )
+            item.target = self
+            item.state = (profile.id == activeID) ? .on : .off
+            // Carry the (mode, profileID) tuple in a representedObject so the
+            // action can route without needing one selector per (mode, id).
+            item.representedObject = ProfileSelection(mode: mode, profileID: profile.id)
+            menu.addItem(item)
+        }
+    }
+
+    @objc private func selectProfileFromMenu(_ sender: NSMenuItem) {
+        guard let selection = sender.representedObject as? ProfileSelection else { return }
+        MainActor.assumeIsolated {
+            PromptStoreViewModel.shared.setActiveProfile(id: selection.profileID, mode: selection.mode)
+        }
+        refreshActiveProfileMenu()
     }
 
     @objc private func openSettings() {
@@ -647,4 +785,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         alert.addButton(withTitle: "OK")
         alert.runModal()
     }
+}
+
+/// Phase 6 — payload attached to active-profile NSMenuItems via
+/// `representedObject` so the click handler can route the (mode, id)
+/// pair without a selector-per-mode explosion.
+private struct ProfileSelection {
+    let mode: RefineMode
+    let profileID: String
 }

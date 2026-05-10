@@ -1,8 +1,14 @@
 APP_NAME := VoiceInputMimo
 APP_BUNDLE := $(APP_NAME).app
 BUILD_DIR := $(shell swift build -c release --show-bin-path 2>/dev/null || echo .build/release)
+CODESIGN_IDENTITY ?= VoiceInputMimo Local
+# Pick a signing identity. The named local cert (created by `make cert-setup`)
+# yields a stable bundle hash across rebuilds, so macOS TCC remembers
+# Microphone + Accessibility grants. Without it we fall back to ad-hoc `-`,
+# which generates a fresh hash every build → TCC re-prompts on every install.
+SIGNARG := $(shell security find-identity -v -p codesigning 2>/dev/null | grep -qF "$(CODESIGN_IDENTITY)" && echo "$(CODESIGN_IDENTITY)" || echo "-")
 
-.PHONY: build clean install run server-start server-stop e2e-phase1 e2e-phase2 e2e-phase3 e2e-phase4 e2e-phase5 e2e-phase6
+.PHONY: build clean install run cert-setup server-start server-stop e2e-phase1 e2e-phase2 e2e-phase3 e2e-phase4 e2e-phase5 e2e-phase6
 
 build:
 	swift build -c release
@@ -13,8 +19,15 @@ build:
 	cp $(BUILD_DIR)/$(APP_NAME) $(APP_BUNDLE)/Contents/MacOS/
 	cp Info.plist $(APP_BUNDLE)/Contents/
 	cp -R Resources/. $(APP_BUNDLE)/Contents/Resources/
-	codesign --force --sign - $(APP_BUNDLE)
-	@echo "\n✅ Built $(APP_BUNDLE)"
+	@if [ "$(SIGNARG)" = "-" ]; then \
+	  echo "⚠️  Ad-hoc signing — TCC will re-prompt on every install."; \
+	  echo "   Run \`make cert-setup\` once for stable signing."; \
+	fi
+	codesign --force --sign "$(SIGNARG)" $(APP_BUNDLE)
+	@echo "\n✅ Built $(APP_BUNDLE) (signed: $(SIGNARG))"
+
+cert-setup:
+	@bash scripts/setup-codesign-cert.sh
 
 run: build
 	open $(APP_BUNDLE)

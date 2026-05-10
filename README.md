@@ -127,7 +127,7 @@ MIMO_PRELOAD=1 ./run.sh
 
 ## Phase B Swift app（已完成）
 
-`Sources/VoiceInputMimo/` 完整 macOS LSUIElement app — **SwiftUI Hybrid 架構**：AppKit 殼（NSWindow / status menu / OverlayPanel）+ SwiftUI 內容（panes / cards / forms），透過 `NSHostingController` 橋接：
+`Sources/VoiceInputMimo/` 完整 macOS LSUIElement app — **SwiftUI Hybrid 架構**：AppKit 殼（NSWindow / NSPanel / status menu）+ SwiftUI 內容（panes / cards / forms / overlay labels），透過 `NSHostingController` / `NSHostingView` 橋接：
 
 **Pipeline 主鏈**
 - `AudioRecorder.swift`：AVAudioEngine 錄 16 kHz mono PCM wav
@@ -148,7 +148,7 @@ MIMO_PRELOAD=1 ./run.sh
 **Input / UI surface**
 - `KeyMonitor.swift`：CGEventTap，依 `ShortcutBinding` 同時監 Fn flagsChanged 與 modifier+keyDown 兩條路徑
 - `ShortcutBinding.swift`：5 個 preset（Disabled / Fn / Control + Option + Space / Control + Option + V / Command + Shift + Space），primary + secondary 各自綁，存於 UserDefaults
-- `OverlayPanel.swift`：`Phase` enum 驅動的單一 `transition(to:)` API，`.refining` 帶 optional `profileLabel` 顯示「Refining Chinese (Default Refine) 1.2s」
+- `OverlayPanel.swift` + `OverlayContentSwiftUI.swift`：`Phase` enum 驅動的單一 `transition(to:)` API，`.refining` 帶 optional `profileLabel` 顯示「Refining Chinese (Default Refine) 1.2s」；**SwiftUI hybrid** — NSPanel + NSVisualEffectView + CALayer 陰影留 AppKit（panel level `.popUpMenu`、Dock 避讓 96 px、NSTrackingArea hover-to-stay、`DispatchWorkItem` 自動消失），文字/波形 layout 走 `NSHostingView<OverlayLabelsView>` + `@Observable OverlayContentModel`；`.bothReady(zh:en:translating:)` 在 translating=true 且字串相異時顯示雙行 ZH+EN，相同則 collapse 單行
 - `AppDelegate.swift`：狀態列選單 — 三段式輸出模式 + **「啟用 Profile」submenu**（兩區 Refine / Claude Code，逐 profile 顯示 ✓ + click 寫 active.json）+ Clipboard History（⌘⌥H）+ Model Memory（⌘⌥M）+ Preferences（⌘,）；啟動時跑 `PromptMigration.bootstrapIfNeeded()` 並 reload `PromptStoreViewModel.shared`
 
 **Settings — SwiftUI Hybrid（Phase 3 + 4）**
@@ -156,13 +156,13 @@ MIMO_PRELOAD=1 ./run.sh
 - `Settings/SettingsRootView.swift`：`NavigationSplitView` sidebar + 7 panes（General / Shortcuts / Speech / ASRServer / **Prompts** / **History** / About）
 - `Settings/Prompts/`：Prompts pane 完整生態
   - `PromptsPaneViewModel.swift`：`@MainActor @Observable` — `paneMode`（profiles / skills）+ profile draft + test history + selectedSkillID
-  - `ProfileSidebar.swift` / `ProfileEditor.swift` / `PromptTestPanel.swift`：Profiles mode 3 欄
-  - `SkillSidebar.swift` / `SkillEditor.swift`：Skills Library mode 2 欄（builtin lock / 使用者 skill CRUD）
+  - `ProfileSidebar.swift` / `ProfileEditor.swift` / `PromptTestPanel.swift`：Profiles mode — `HStack(sidebar 240) + Divider + VStack(editor flex + Divider + test panel 280)`，**無 SplitView primitive**（避開 nested NavigationSplitView 寬度 collapse）
+  - `SkillSidebar.swift` / `SkillEditor.swift`：Skills Library mode — `HStack(sidebar 240) + Divider + editor flex`（builtin lock / 使用者 skill CRUD）
   - `PromptImportExportAdapter.swift`：`@MainActor` AppKit adapter（NSSavePanel / NSOpenPanel）— AppKit isolated to Settings layer，data layer 純 Foundation
 
 **輔助 window**
 - `ClipboardHistoryWindow.swift`：thin NSWindow 殼（v1 之前 322 行 NSPanel + NSTableView，現 38 行）
-- `History/ClipboardHistoryView.swift`：SwiftUI `NavigationSplitView` + `LazyVGrid` 卡片（kind capsule + timestamp + preview）+ VSplitView detail；同時被獨立 window 與 Settings → History pane 共用
+- `History/ClipboardHistoryView.swift`：SwiftUI 單 `List` + 頂部 segmented Picker（Kind / Time bucket）+ 底部固定高度 detail strip；**無 SplitView primitive**（NavigationSplitView/HSplitView/VSplitView 在 Settings → History 嵌套 context 都會 collapse 寬度，唯一可靠解是全砍）；同時被獨立 window 與 Settings → History pane 共用
 - `History/ClipboardArchiveViewModel.swift`：`@MainActor @Observable` — kind/time bucket filter，clock + calendar 注入給測試
 - `ClipboardArchive.swift`：每次完成 dictation 即透過 `saveSession(zh:english:)` 保留 ASR 原文 + 輸出，標記為 `EntryKind.session`；舊 clipboard snapshot 仍以 `EntryKind.clipboard` 存
 - `ModelMemoryWindow.swift` + `ModelMemoryMonitor.swift`：每 5s 輪詢 engine `/admin/memory` 與 LLM 後端（Rapid-MLX）`/v1/status`，顯示 Speech / LLM 模型 RSS / metal active / cache

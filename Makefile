@@ -6,7 +6,11 @@ CODESIGN_IDENTITY ?= VoiceInputMimo Local
 # yields a stable bundle hash across rebuilds, so macOS TCC remembers
 # Microphone + Accessibility grants. Without it we fall back to ad-hoc `-`,
 # which generates a fresh hash every build → TCC re-prompts on every install.
-SIGNARG := $(shell security find-identity -v -p codesigning 2>/dev/null | grep -qF "$(CODESIGN_IDENTITY)" && echo "$(CODESIGN_IDENTITY)" || echo "-")
+# NOTE: no -v flag — self-signed certs always fail trust validation
+# (CSSMERR_TP_NOT_TRUSTED), so `find-identity -v` would always miss our local
+# cert and silently fall back to ad-hoc. `find-identity` without -v lists all
+# identities regardless of trust, which is what codesign-by-name actually uses.
+SIGNARG := $(shell security find-identity -p codesigning 2>/dev/null | grep -qF "$(CODESIGN_IDENTITY)" && echo "$(CODESIGN_IDENTITY)" || echo "-")
 
 .PHONY: build clean install run cert-setup dmg server-start server-stop e2e-phase1 e2e-phase2 e2e-phase3 e2e-phase4 e2e-phase5 e2e-phase6
 

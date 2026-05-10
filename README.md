@@ -118,6 +118,8 @@ make cert-setup     # 一次性，建立本地 self-signed cert（讓 TCC 權限
 make dmg            # 產出 dist/VoiceInputMimo-<date>-<sha>.dmg
 ```
 
+⚠️ `cert-setup` 完後第一次 `make build` 會跳一個 SecurityAgent 對話框問「codesign 想用 private key」— 點 **Always Allow** 一次，之後 build/dmg 都靜默。
+
 `VERSION=1.2.3 make dmg` 可以指定版本號當檔名 suffix（不指定就用 `<date>-<git-sha>`）。
 
 ## 啟動

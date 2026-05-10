@@ -1,12 +1,21 @@
 import SwiftUI
 
-/// Hosted both by `ClipboardHistoryWindow` (standalone) and by
-/// `HistoryPane` (Settings) — same view tree, different shell. Uses
-/// `HSplitView` rather than `NavigationSplitView` because the Settings
-/// window already wraps everything in a NavigationSplitView (sidebar
-/// listing the panes), and macOS does not lay out nested
-/// NavigationSplitViews — the inner detail collapses to ~0 width and
-/// cards render as one-character-wide vertical strips.
+/// Hosted both by `ClipboardHistoryWindow` (standalone) and by `HistoryPane`
+/// (Settings → History) — same view, different shell.
+///
+/// Layout discipline (after three failed attempts with SplitView nests):
+///
+/// - **No NavigationSplitView / HSplitView / VSplitView anywhere inside this
+///   view.** Settings already wraps its detail in a NavigationSplitView, so
+///   any inner split would compete for the same width budget and the inner
+///   detail collapses toward 0px. The standalone window doesn't need split
+///   chrome either — a single list with top filters is sufficient.
+/// - **A single `List` is the most reliable SwiftUI macOS layout primitive.**
+///   It computes its own width from the host context and never collapses.
+/// - Filters live in a top toolbar (segmented Pickers), not a sibling sidebar
+///   list, so there's only ever one List in the view tree.
+/// - Selecting a row reveals an inline detail strip below the list (fixed
+///   height, scrollable) — no popover, no sheet, no second split.
 struct ClipboardHistoryView: View {
     @State private var vm = ClipboardArchiveViewModel()
 
@@ -14,227 +23,202 @@ struct ClipboardHistoryView: View {
         @Bindable var vm = vm
 
         VStack(spacing: 0) {
-            inlineToolbar(vm: vm)
-            HStack(spacing: 0) {
-                sidebar(vm: vm)
-                    .frame(width: 220)
+            topToolbar(vm: vm)
+            Divider()
+            filterBar(vm: vm)
+            Divider()
+            mainList(vm: vm)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            if vm.selectedEntry != nil {
                 Divider()
-                detailColumn(vm: vm)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                detailStrip(vm: vm)
+                    .frame(height: 180)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task { vm.reload() }
     }
 
-    @ViewBuilder
-    private func inlineToolbar(vm: ClipboardArchiveViewModel) -> some View {
-        HStack(spacing: 8) {
-            Text("Clipboard History").font(.headline)
-            Spacer()
-            Button {
-                vm.reload()
-            } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .help("Refresh")
+    // MARK: - Top toolbar
 
+    @ViewBuilder
+    private func topToolbar(vm: ClipboardArchiveViewModel) -> some View {
+        HStack(spacing: 8) {
+            Text("Clipboard History")
+                .font(.headline)
+            Text("\(vm.entries.count) entries")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            Button { vm.reload() } label: { Image(systemName: "arrow.clockwise") }
+                .help("Refresh")
             Button {
                 NSWorkspace.shared.activateFileViewerSelecting([vm.archiveURL])
-            } label: {
-                Image(systemName: "folder")
-            }
-            .help("Reveal archive in Finder")
-
+            } label: { Image(systemName: "folder") }
+                .help("Reveal archive in Finder")
             Button(role: .destructive) {
                 confirmClear(vm: vm)
-            } label: {
-                Image(systemName: "trash")
-            }
-            .disabled(vm.entries.isEmpty)
-            .help("Clear all history")
+            } label: { Image(systemName: "trash") }
+                .disabled(vm.entries.isEmpty)
+                .help("Clear all history")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 10)
+        .frame(maxWidth: .infinity)
         .background(.bar)
     }
 
-    // MARK: - Sidebar
+    // MARK: - Filter bar (replaces the broken inner sidebar)
 
     @ViewBuilder
-    private func sidebar(vm: ClipboardArchiveViewModel) -> some View {
+    private func filterBar(vm: ClipboardArchiveViewModel) -> some View {
         @Bindable var vm = vm
 
-        List {
-            Section("Kind") {
-                ForEach(HistoryKindFilter.allCases, id: \.self) { f in
-                    HStack {
-                        Image(systemName: icon(for: f))
-                            .frame(width: 16)
-                        Text(f.label)
-                        Spacer()
-                        Text("\(vm.count(forKind: f))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture { vm.kindFilter = f }
-                    .background(vm.kindFilter == f ? Color.accentColor.opacity(0.15) : Color.clear)
-                }
-            }
-            Section("Time") {
-                ForEach(HistoryTimeBucket.allCases, id: \.self) { b in
-                    HStack {
-                        Image(systemName: bucketIcon(for: b))
-                            .frame(width: 16)
-                        Text(b.label)
-                        Spacer()
-                        Text("\(vm.count(forBucket: b))")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture { vm.timeBucket = b }
-                    .background(vm.timeBucket == b ? Color.accentColor.opacity(0.15) : Color.clear)
-                }
-            }
-        }
-        .listStyle(.sidebar)
-    }
-
-    // MARK: - Detail
-
-    @ViewBuilder
-    private func detailColumn(vm: ClipboardArchiveViewModel) -> some View {
-        @Bindable var vm = vm
-
-        VSplitView {
-            ScrollView {
-                if vm.filteredEntries.isEmpty {
-                    ContentUnavailableView(
-                        vm.entries.isEmpty ? "No history yet" : "No matches",
-                        systemImage: "doc.on.clipboard",
-                        description: Text(
-                            vm.entries.isEmpty
-                            ? "Voice sessions appear here after each completed dictation."
-                            : "Adjust the sidebar filter to see entries."
-                        )
-                    )
-                    .padding(40)
-                } else {
-                    LazyVGrid(
-                        columns: [GridItem(.adaptive(minimum: 280, maximum: 360), spacing: 12)],
-                        spacing: 12
-                    ) {
-                        ForEach(vm.filteredEntries) { item in
-                            card(item, isSelected: vm.selectedEntryID == item.id)
-                                .contentShape(Rectangle())
-                                .onTapGesture { vm.selectedEntryID = item.id }
-                                .contextMenu {
-                                    Button("Copy to Clipboard") { _ = vm.restore(item) }
-                                    Button("Delete", role: .destructive) { vm.delete(item) }
-                                }
-                        }
-                    }
-                    .padding(16)
-                }
-            }
-            .frame(minHeight: 200)
-
-            detailPanel(vm: vm)
-                .frame(minHeight: 140)
-        }
-    }
-
-    @ViewBuilder
-    private func card(_ item: HistoryEntryViewItem, isSelected: Bool) -> some View {
-        VStack(alignment: .leading, spacing: 6) {
+        HStack(spacing: 16) {
             HStack(spacing: 6) {
-                Text(item.kind.displayName.uppercased())
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(item.kind == .session ? Color.accentColor : Color.secondary)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(
-                        Capsule().fill(
-                            (item.kind == .session ? Color.accentColor : Color.secondary)
-                                .opacity(0.12)
-                        )
-                    )
-                Spacer()
-                Text(item.clockLabel)
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                Text("Kind").font(.caption).foregroundStyle(.secondary)
+                Picker("", selection: $vm.kindFilter) {
+                    ForEach(HistoryKindFilter.allCases, id: \.self) { f in
+                        Text("\(f.label) (\(vm.count(forKind: f)))").tag(f)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
             }
-            Text(item.preview)
-                .font(.callout)
-                .foregroundStyle(.primary)
-                .lineLimit(3)
-                .multilineTextAlignment(.leading)
-                .frame(maxWidth: .infinity, alignment: .leading)
+
+            HStack(spacing: 6) {
+                Text("Time").font(.caption).foregroundStyle(.secondary)
+                Picker("", selection: $vm.timeBucket) {
+                    ForEach(HistoryTimeBucket.allCases, id: \.self) { b in
+                        Text("\(b.label) (\(vm.count(forBucket: b)))").tag(b)
+                    }
+                }
+                .pickerStyle(.segmented)
+                .labelsHidden()
+                .fixedSize()
+            }
+
+            Spacer()
         }
-        .padding(12)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(isSelected ? Color.accentColor : Color.clear, lineWidth: 2)
-        )
+        .padding(.horizontal, 16)
+        .padding(.vertical, 8)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    // MARK: - Main list
+
+    @ViewBuilder
+    private func mainList(vm: ClipboardArchiveViewModel) -> some View {
+        @Bindable var vm = vm
+
+        if vm.filteredEntries.isEmpty {
+            ContentUnavailableView(
+                vm.entries.isEmpty ? "No history yet" : "No matches",
+                systemImage: "doc.on.clipboard",
+                description: Text(
+                    vm.entries.isEmpty
+                    ? "Voice sessions appear here after each completed dictation."
+                    : "Adjust the filters above to see entries."
+                )
+            )
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        } else {
+            List(selection: $vm.selectedEntryID) {
+                ForEach(vm.filteredEntries) { item in
+                    row(item)
+                        .tag(item.id)
+                        .contextMenu {
+                            Button("Copy to Clipboard") { _ = vm.restore(item) }
+                            Button("Delete", role: .destructive) { vm.delete(item) }
+                        }
+                }
+            }
+            .listStyle(.inset)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
     }
 
     @ViewBuilder
-    private func detailPanel(vm: ClipboardArchiveViewModel) -> some View {
+    private func row(_ item: HistoryEntryViewItem) -> some View {
+        HStack(spacing: 10) {
+            Image(systemName: kindIcon(item.kind))
+                .frame(width: 18, alignment: .center)
+                .foregroundStyle(item.kind == .session ? Color.accentColor : Color.secondary)
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: 6) {
+                    Text(item.kind.displayName.uppercased())
+                        .font(.caption2.weight(.semibold))
+                        .foregroundStyle(item.kind == .session ? Color.accentColor : Color.secondary)
+                    Text(item.clockLabel)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                }
+                Text(item.preview)
+                    .font(.body)
+                    .lineLimit(2)
+                    .truncationMode(.tail)
+                    .foregroundStyle(.primary)
+            }
+            Spacer(minLength: 0)
+        }
+        .padding(.vertical, 4)
+    }
+
+    // MARK: - Inline detail strip
+
+    @ViewBuilder
+    private func detailStrip(vm: ClipboardArchiveViewModel) -> some View {
+        @Bindable var vm = vm
+
         if let entry = vm.selectedEntry {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 HStack {
-                    Text(entry.kind.displayName).font(.caption).foregroundStyle(.secondary)
+                    Text(entry.kind.displayName)
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(entry.kind == .session ? Color.accentColor : Color.secondary)
                     Text("·").foregroundStyle(.secondary)
-                    Text(entry.clockLabel).font(.caption).foregroundStyle(.secondary)
+                    Text(entry.clockLabel)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                     Spacer()
                     Button("Copy") { _ = vm.restore(entry) }
                         .keyboardShortcut(.defaultAction)
-                    Button("Delete", role: .destructive) { vm.delete(entry) }
+                    Button(role: .destructive) {
+                        vm.delete(entry)
+                    } label: { Image(systemName: "trash") }
                         .keyboardShortcut(.delete)
+                    Button {
+                        vm.selectedEntryID = nil
+                    } label: { Image(systemName: "xmark") }
+                        .help("Close detail")
                 }
                 ScrollView {
                     Text(entry.content)
                         .font(.system(size: 12, design: .monospaced))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .textSelection(.enabled)
+                        .padding(.vertical, 4)
                 }
                 if let err = vm.lastError {
                     Text(err).font(.caption).foregroundStyle(.red)
                 }
             }
-            .padding(16)
-        } else {
-            ContentUnavailableView(
-                "Pick an entry",
-                systemImage: "rectangle.stack",
-                description: Text("Tap a card above to see its full content here.")
-            )
+            .padding(.horizontal, 16)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(.bar)
         }
     }
 
-    // MARK: - Icons
+    // MARK: - Helpers
 
-    private func icon(for filter: HistoryKindFilter) -> String {
-        switch filter {
-        case .all: return "tray.full"
+    private func kindIcon(_ kind: ClipboardArchive.EntryKind) -> String {
+        switch kind {
         case .session: return "waveform"
         case .clipboard: return "doc.on.clipboard"
         }
     }
-
-    private func bucketIcon(for bucket: HistoryTimeBucket) -> String {
-        switch bucket {
-        case .all: return "calendar"
-        case .today: return "sun.max"
-        case .yesterday: return "moon"
-        case .older: return "archivebox"
-        }
-    }
-
-    // MARK: - Actions
 
     private func confirmClear(vm: ClipboardArchiveViewModel) {
         let alert = NSAlert()

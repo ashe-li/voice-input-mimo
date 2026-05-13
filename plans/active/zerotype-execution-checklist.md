@@ -200,23 +200,26 @@ parent_plan: plans/active/zerotype-aligned-roadmap.md
 - [ ] 通過該 plan 之 acceptance gates（Phase 1-6 各 e2e gate）
 - [ ] MVP ship + KB report
 
-### Phase 3.2：REQ-NEW-D — Workflow Chaining
+### Phase 3.2：REQ-NEW-D — Workflow Chaining ✅ SHIPPED (PR #16 pending merge, 2026-05-14)
 
-- [ ] 建 worktree：`git worktree add ~/Documents/voice-input-mimo-workflow-chain -b feat/workflow-chaining`
-- [ ] 設計 Workflow data model（name / steps[] / outputPolicy）
-- [ ] WorkflowStore：`App Support/Workspaces/Workflows/*.json`
-- [ ] Settings → Workspaces → Workflows（採 WorkspacePane）
-  - Sidebar：workflow chains list
-  - Content panel：inline 編輯 steps（拖曳排序、選 mode、綁 profile）
-  - Render preview：試跑樣本看 step-by-step 輸出
-- [ ] 快捷鍵綁定 chain 執行
-- [ ] 失敗 fallback：任一 step LLM 失敗 → 回退上一 step + 標示
-- [ ] 與 REQ-NEW-A 整合：context-aware 可 dispatch 到 workflow
-- [ ] 單元測試：chain 執行流 / fallback
-- [ ] 整合測試：跑「refine → structure → 翻 EN」三步 chain
-- [ ] `make install` + 手動測試
-- [ ] 寫 KB report
-- [ ] PR merge → main → 清 worktree
+- [x] 建 worktree：`git worktree add ~/Documents/voice-input-mimo-workflow-chain -b feat/workflow-chaining`
+- [x] 設計 Workflow data model（name / steps[] / outputPolicy）
+- [x] WorkflowStore：`App Support/Workspaces/Workflows/*.json`（單一 default.json envelope，array 形式）
+- [x] Settings → Workspaces → Workflows（custom 排版，非 WorkspacePane — step row 多欄不符 WorkspacePane 假設）
+  - [x] Sidebar：workflow chains list
+  - [x] Content panel：inline 編輯 steps（List.onMove 拖曳排序、選 mode、profile free-form textfield）
+  - [x] Render preview：side-by-side input ↔ step-by-step output，async Run 按鈕
+- [ ] ~~快捷鍵綁定 chain 執行~~ **v1 deferred** — 既有 ShortcutBinding 是 4 固定 preset CGEvent tap，自由 hotkey 需新建 parser+conflict detection+dispatch table（~150-300 行），follow-up plan 待開。UI 欄位保留（footer 明示「stored but not bound」）
+- [x] 失敗 fallback：任一 step LLM 失敗 → 回退上一 step + 標示（chain 停在 fail step，failedAtStep 記 index，finalOutput 留前一 step 值）
+- [ ] ~~與 REQ-NEW-A 整合：context-aware 可 dispatch 到 workflow~~ **Blocked by PR #15 merge** — Task #23：PR #15 進 main 後 rebase 此 worktree 做 ToneMapping.delegated 從 RefineMode 擴展成 enum `{ mode, workflow }`
+- [x] 單元測試：chain 執行流 / fallback（7 tests in WorkflowExecutorTests）
+- [x] 整合測試：via WorkflowsPaneViewModelTests preview cycle（12 tests）+ executor mock chain（3-step refine→structure→claudeCode）
+- [x] `make install` 成功 → /Applications/VoiceInputMimo.app 更新
+- [ ] **HITL pending**：user 手動 e2e 驗證 4 路徑（新增 workflow / 拖曳排序 / 試跑 / 持久化）
+- [x] 寫 KB report：`~/Documents/knowledge-base/reports/2026-05-14-voice-input-mimo-sprint-3-2-workflow-chaining-ship.md`
+- [ ] PR #16 merge → main → 清 worktree
+
+**Files shipped**：8 new (3 model + 2 UI + 3 tests) + 2 modified (SettingsPane/SettingsRootView)；28 new tests，260/260 全綠。
 
 **Sprint 3 出口檢查**：
 - [ ] local-meeting-captions MVP ship

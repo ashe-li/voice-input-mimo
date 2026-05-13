@@ -56,6 +56,7 @@ final class PromptStoreViewModel {
         case .refine: return activeSelection?.refineProfileID
         case .claudeCode: return activeSelection?.claudeCodeProfileID
         case .structure: return activeSelection?.structureProfileID
+        case .contextAware: return nil  // contextAware delegates — no own profile
         }
     }
 
@@ -138,6 +139,11 @@ final class PromptStoreViewModel {
                 claudeCodeProfileID: current.claudeCodeProfileID,
                 structureProfileID: id
             )
+        case .contextAware:
+            // contextAware delegates per-app; no dedicated profile slot. The
+            // call is a no-op rather than throw so Settings UI code paths that
+            // iterate all modes don't need to filter.
+            return
         }
         do {
             try store.saveActiveSelection(updated)

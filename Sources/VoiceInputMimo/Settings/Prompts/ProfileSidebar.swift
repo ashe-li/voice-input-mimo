@@ -197,6 +197,7 @@ private struct ModeSectionHeader: View {
         case .refine: return "Refine · 中文修正"
         case .claudeCode: return "Claude Code · 英文翻譯"
         case .structure: return "Structure · 複合情境"
+        case .contextAware: return "Auto · 自動辨識"
         }
     }
 }

@@ -22,6 +22,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var chineseOutputMenuItem: NSMenuItem!
     private var refinedChineseOutputMenuItem: NSMenuItem!
     private var structureOutputMenuItem: NSMenuItem!
+    private var contextAwareOutputMenuItem: NSMenuItem!
     private var asrServerMenuItem: NSMenuItem!
     private var asrServerStatusMenuItem: NSMenuItem!
     private lazy var settingsWindow = SettingsWindow()
@@ -303,7 +304,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // itself uses the routed structure profile via LLMRefiner).
             let activeMode = LLMRefiner.activeModeFromToggles(
                 claudeCodeEnabled: refiner.claudeCodeModeEnabled,
-                structureEnabled: refiner.structureModeEnabled
+                structureEnabled: refiner.structureModeEnabled,
+                contextAwareEnabled: refiner.contextAwareModeEnabled
             )
             let translating = activeMode == .claudeCode
             let profileLabel = activeProfileLabel(for: activeMode)
@@ -382,7 +384,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let refiner = LLMRefiner.shared
         let activeMode = LLMRefiner.activeModeFromToggles(
             claudeCodeEnabled: refiner.claudeCodeModeEnabled,
-            structureEnabled: refiner.structureModeEnabled
+            structureEnabled: refiner.structureModeEnabled,
+            contextAwareEnabled: refiner.contextAwareModeEnabled
         )
         let translating = activeMode == .claudeCode
         overlayPanel.transition(to: .bothReady(zh: currentZH, en: english, translating: translating))
@@ -580,6 +583,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         structureOutputMenuItem.target = self
         outputMenu.addItem(structureOutputMenuItem)
 
+        contextAwareOutputMenuItem = NSMenuItem(
+            title: "自動辨識（依前景 app 自動選 mode）",
+            action: #selector(selectContextAwareOutputMode),
+            keyEquivalent: ""
+        )
+        contextAwareOutputMenuItem.target = self
+        outputMenu.addItem(contextAwareOutputMenuItem)
+
         outputMenu.addItem(.separator())
 
         let outputHelpItem = NSMenuItem(
@@ -698,6 +709,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refiner.isEnabled = false
         refiner.claudeCodeModeEnabled = false
         refiner.structureModeEnabled = false
+        refiner.contextAwareModeEnabled = false
         refreshOutputModeMenu()
     }
 
@@ -706,13 +718,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refiner.isEnabled = true
         refiner.claudeCodeModeEnabled = false
         refiner.structureModeEnabled = false
+        refiner.contextAwareModeEnabled = false
         refreshOutputModeMenu()
     }
 
     @objc private func selectStructureOutputMode() {
         let refiner = LLMRefiner.shared
         refiner.isEnabled = true
-        refiner.structureModeEnabled = true  // setter clears claudeCodeModeEnabled
+        refiner.structureModeEnabled = true  // setter clears claudeCodeModeEnabled + contextAwareModeEnabled
+        refreshOutputModeMenu()
+    }
+
+    @objc private func selectContextAwareOutputMode() {
+        let refiner = LLMRefiner.shared
+        refiner.isEnabled = true
+        refiner.contextAwareModeEnabled = true  // setter clears the explicit-mode flags
         refreshOutputModeMenu()
     }
 
@@ -720,17 +740,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Matches the menu-bar reading order (top→bottom) so users build a
     /// consistent mental model: → moves "down the menu", ← moves "up".
     private enum OutputModeChoice: CaseIterable {
-        case raw          // ASR-only, LLM disabled
-        case refine       // ZH cleanup
-        case claudeCode   // ZH→EN
-        case structure    // ZH→template
+        case raw           // ASR-only, LLM disabled
+        case refine        // ZH cleanup
+        case claudeCode    // ZH→EN
+        case structure     // ZH→template
+        case contextAware  // Auto-dispatch per frontmost app
 
-        static let cycleOrder: [OutputModeChoice] = [.raw, .refine, .claudeCode, .structure]
+        static let cycleOrder: [OutputModeChoice] = [.raw, .refine, .claudeCode, .structure, .contextAware]
     }
 
     private func currentOutputModeChoice() -> OutputModeChoice {
         let refiner = LLMRefiner.shared
         if !refiner.isEnabled { return .raw }
+        if refiner.contextAwareModeEnabled { return .contextAware }
         if refiner.structureModeEnabled { return .structure }
         if refiner.claudeCodeModeEnabled { return .claudeCode }
         return .refine
@@ -742,6 +764,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case .refine: selectRefinedChineseOutputMode()
         case .claudeCode: selectEnglishOutputMode()
         case .structure: selectStructureOutputMode()
+        case .contextAware: selectContextAwareOutputMode()
         }
     }
 
@@ -774,12 +797,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refinedChineseOutputMenuItem.state = (choice == .refine) ? .on : .off
         englishOutputMenuItem.state = (choice == .claudeCode) ? .on : .off
         structureOutputMenuItem.state = (choice == .structure) ? .on : .off
+        contextAwareOutputMenuItem.state = (choice == .contextAware) ? .on : .off
 
         switch choice {
         case .raw: outputModeMenuItem.title = "輸出模式：中文 ASR"
         case .refine: outputModeMenuItem.title = "輸出模式：中文修正"
         case .claudeCode: outputModeMenuItem.title = "輸出模式：英文翻譯"
         case .structure: outputModeMenuItem.title = "輸出模式：複合情境"
+        case .contextAware: outputModeMenuItem.title = "輸出模式：自動辨識"
         }
     }
 

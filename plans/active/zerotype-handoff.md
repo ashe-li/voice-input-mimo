@@ -1,7 +1,7 @@
 ---
 title: ZeroType Roadmap — Cross-Session Handoff Prompt
 slug: zerotype-handoff
-status: ready-to-paste (revised 2026-05-14 — most phases now shipped; only Sprint 3.2 truly unstarted, Sprint 3.1 HITL-blocked)
+status: ready-to-paste (revised 2026-05-14 evening — Sprint 3.2 now shipped via PR #16; only HITL + Task #23 follow-up remain)
 created: 2026-05-14
 revised: 2026-05-14
 purpose: 直接貼到新 Claude Code session 或 /compact 後使用，自包含恢復 context
@@ -68,7 +68,7 @@ KB 中可參考：
 | Sprint 2.2 Trace + Park mode | ✅ shipped（PR #14）|
 | Sprint 2.3 Mode 4 Context-Aware | ✅ shipped — PR #15 open, awaiting user e2e（Mail / Cursor / Notion / unknown bundle 4 paths）|
 | Sprint 3.1 local-meeting-captions | 🟡 13/16 shipped in **獨立 repo** `~/Documents/local-meeting-captions/` — 剩 3 步 HITL-blocked（user 跑 14 cells × Chrome/Zoom/Meet/Twitch drift）|
-| Sprint 3.2 REQ-NEW-D Workflow Chaining | ⏳ **唯一真正未開工**的 phase |
+| Sprint 3.2 REQ-NEW-D Workflow Chaining | ✅ shipped — PR #16 open（data model + executor + UI + 28 tests）；hotkey + Mode 4 dispatch 為 follow-up |
 
 ## 我接下來要做的事
 

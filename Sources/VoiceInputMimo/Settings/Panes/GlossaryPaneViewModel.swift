@@ -13,7 +13,7 @@ import SwiftUI
 final class GlossaryPaneViewModel {
     private(set) var entries: [GlossaryEntry] = []
     var selection: String?
-    private(set) var banner: String?
+    var banner: String?
 
     private let store: GlossaryStore
 
@@ -68,6 +68,24 @@ final class GlossaryPaneViewModel {
             banner = nil
         } catch {
             banner = "Delete failed: \(error.localizedDescription)"
+        }
+    }
+
+    /// Merge imported entries into the store (replace by id, append new ids).
+    /// Caller has already shown the open-panel; this method handles the merge
+    /// + persistence + banner update.
+    func applyImport(_ incoming: [GlossaryEntry]) {
+        do {
+            let current = try store.loadAll()
+            let merged = GlossaryImportExportAdapter.merge(
+                existing: current,
+                incoming: incoming
+            )
+            try store.saveAll(merged.entries)
+            entries = merged.entries
+            banner = "Imported — added \(merged.result.added), replaced \(merged.result.replaced)"
+        } catch {
+            banner = "Import failed: \(error.localizedDescription)"
         }
     }
 }

@@ -21,6 +21,8 @@ struct GlossaryPane: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
+                Button("Import…") { runImport() }
+                Button("Export…") { runExport() }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -58,6 +60,32 @@ struct GlossaryPane: View {
         }
         .navigationTitle("Glossary")
         .task { model.reload() }
+    }
+
+    // MARK: - Import / Export
+
+    private func runExport() {
+        let stamp = ISO8601DateFormatter().string(from: Date())
+            .replacingOccurrences(of: ":", with: "-")
+        do {
+            if let url = try GlossaryImportExportAdapter.exportEntries(
+                model.entries,
+                suggestedName: "glossary-\(stamp).json"
+            ) {
+                model.banner = "Exported \(model.entries.count) terms to \(url.lastPathComponent)"
+            }
+        } catch {
+            model.banner = "Export failed: \(error.localizedDescription)"
+        }
+    }
+
+    private func runImport() {
+        do {
+            guard let incoming = try GlossaryImportExportAdapter.importEntries() else { return }
+            model.applyImport(incoming)
+        } catch {
+            model.banner = "Import failed: \(error.localizedDescription)"
+        }
     }
 }
 

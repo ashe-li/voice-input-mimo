@@ -95,17 +95,31 @@ DMG 內附 `README-INSTALL.txt`（中英雙語）有同樣的步驟。
 
 12 個 builtin skills 不能改但可以複製，9 個 builtin profiles 同理。
 
+### Glossary（專有名詞詞庫）
+
+`Settings → Workspace → Glossary`：保留 LLM 容易誤翻 / 誤判的專有名詞（公司名、產品名、內部 repo、雲端 brand）。
+
+- 每筆條目：`spoken`（ASR 可能輸出形）→ `canonical`（正確形）+ `context`（給 LLM 的提示）
+- 開機時自動 inject 進 LLM system prompt 的「## Glossary」section
+- **匯入/匯出** — JSON 格式，merge-by-id：同 id 取代、新 id 追加
+- 範例：`focus → vocus`、`carpenter → Karpenter`、`cloud flare → Cloudflare`
+
 ### 其他快捷鍵
 
 | 鍵 | 功能 |
 |---|---|
 | `fn`（按住） | 錄音 |
-| `fn + →` / `fn + ←` | 切換輸出模式 |
+| `Ctrl + Option + →` / `Ctrl + Option + ←` | 切換輸出模式（cycle raw / refine / claudeCode / structure） |
+| `Ctrl + Option + R`（按住） | Park mode — 錄音 + 存 trace + 存 Clipboard History，**不貼上**（給「先講起來放著」場景） |
 | `⌘ + ,` | 開 Settings |
 | `⌘ + ⌥ + H` | Clipboard History（看歷次轉錄結果） |
 | `⌘ + ⌥ + M` | Model Memory monitor（看 ASR / LLM 模型 RSS） |
 
-錄音熱鍵可在 `Settings → Shortcuts` 改（5 個 preset：Disabled / Fn / Control+Option+Space / Control+Option+V / Command+Shift+Space），primary + secondary 兩條獨立綁定。
+錄音熱鍵可在 `Settings → Shortcuts` 改（5 個 preset：Disabled / Fn / Control+Option+Space / Control+Option+V / Command+Shift+Space），primary + secondary 兩條獨立綁定。Ctrl+Option 系列的 cycle / park 各自有獨立 toggle，預設都開啟。
+
+### Trace 紀錄
+
+每次錄音會在 `~/Library/Application Support/VoiceInputMimo/workspaces/traces/traces.jsonl` 累積一筆 trace entry：ASR / LLM / final 三層文字 + 各 stage 時間 log + 對應的 Clipboard 時間戳。Clipboard History detail strip 會顯示對應的 `Trace: trace-xxxxxxxx` 連結。Park mode 的 trace 帶 `mode=park` 標記。
 
 ---
 

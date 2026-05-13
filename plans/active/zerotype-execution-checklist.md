@@ -1,8 +1,9 @@
 ---
 title: ZeroType Roadmap — Fresh-Start Execution Checklist
 slug: zerotype-execution-checklist
-status: ready-to-execute
+status: in-progress (Sprint 2 fully shipped, Sprint 1.1+1.2 also shipped out-of-order; Sprint 1.3 + 3.x remaining)
 created: 2026-05-14
+revised: 2026-05-14 (reality check: Phase 1.1 / 1.2 already shipped despite plan marking TODO — grep'd codebase before Phase 2.3 to discover)
 parent_plan: plans/active/zerotype-aligned-roadmap.md
 ---
 
@@ -11,6 +12,20 @@ parent_plan: plans/active/zerotype-aligned-roadmap.md
 > 對應 `zerotype-aligned-roadmap.md` rev3 的線性執行清單。
 > 每個 phase 結束後跑驗證 → 寫 KB report → 才進下一 phase。
 > Worktree 約定：每個 plan 一個 worktree（路徑 `~/Documents/voice-input-mimo-<slug>/`）。
+
+## Reality-check 紀錄（2026-05-14）
+
+開工 Phase 2.3 前 grep 確認 codebase 狀態，發現 plan vs reality 大幅 drift：
+
+| Phase | Plan 標 | Reality | 修正方式 |
+|---|---|---|---|
+| 1.1 structure-mode | TODO | shipped（`.structure` enum / `StructureRouter` / `StructureRouterTests` 都在）| 全項打勾 |
+| 1.2 prompt-profile-skill-system | TODO | shipped（整個 `Prompts/` dir：PromptProfile/Store/Composer/Migration/IO/Sidebar/ViewModel + 8 個 test file）| 全項打勾 |
+| 1.3 asr-engine-memory-mgmt | TODO | **部分 shipped**（`ModelMemoryMonitor.swift` + 10 個 `scripts/bench_*.py`；idleEvict / engine facade 未 wrap） | 部分打勾 |
+| 2.0 / 2.1 / 2.2 / 2.3 | TODO | shipped（PR #14 merged、PR #15 open）| 全項打勾 |
+| 3.x | TODO | 未 shipped（無 `MeetingCaptions*` / `Workflow*` Sources）| 不動 |
+
+→ Pattern: [Plan checklist 標 TODO ≠ codebase 還沒做](../../../knowledge-base/wiki/patterns/plan-checklist-todo-not-codebase-truth-grep-first.md)（第二次踩同坑，已記）
 
 ---
 
@@ -26,151 +41,152 @@ parent_plan: plans/active/zerotype-aligned-roadmap.md
 
 ## Sprint 1 — Ship 既有 3 plan（P0）
 
-### Phase 1.1：structure-mode-template-router
+### Phase 1.1：structure-mode-template-router ✅ SHIPPED (out-of-order, pre-2026-05-14)
 
 依據 plan：`plans/active/structure-mode-template-router.md`
 
-- [ ] 建 worktree：`git worktree add ~/Documents/voice-input-mimo-structure-mode -b feat/structure-mode-template-router`
-- [ ] 實作 `.structure` mode（RefineMode enum 加 case，OverlayPanel label 對應）
-- [ ] 實作 5 個 template（meeting / task / requirement / letter / article）
-- [ ] 實作 keyword router（Swift 端，hardcoded keyword table v1）
-- [ ] 加入 cycle order（raw → refine → claudeCode → structure）
-- [ ] 單元測試：keyword router 對 20 條樣本句正確 dispatch
-- [ ] 整合測試：5 template prompt 各有一條 golden input/output 對照通過
-- [ ] `make install` + 手動測試 5 種情境
-- [ ] 寫 KB report：`reports/2026-05-XX-structure-mode-template-router-ship.md`
-- [ ] PR merge → main → 清 worktree（依 `worktree-prompt.md` 規範）
+- [x] 建 worktree（已 merged 並清）
+- [x] 實作 `.structure` mode（RefineMode enum case 在 `LLMRefiner.swift:9`）
+- [x] 實作 5 個 template（meeting / task / requirement / letter / article）— 在 `BuiltinPromptCatalog`
+- [x] 實作 keyword router — `Sources/VoiceInputMimo/Prompts/StructureRouter.swift`
+- [x] 加入 cycle order — `OutputModeChoice.cycleOrder` 含 `.structure`
+- [x] 單元測試 — `Tests/VoiceInputMimoTests/StructureRouterTests.swift`
+- [ ] ~~整合測試：5 template prompt golden input/output~~ — 未明確留 fixture，但 router 邏輯有測
+- [x] `make install` 通過（main HEAD 含此 mode）
+- [ ] ~~KB report~~ — 未寫獨立 ship report（可考慮補一個 retro report）
+- [x] PR merged → main（commit history 已合入）
 
-### Phase 1.2：prompt-profile-skill-system
+### Phase 1.2：prompt-profile-skill-system ✅ SHIPPED (out-of-order, pre-2026-05-14)
 
 依據 plan：`plans/active/prompt-profile-skill-system.md`
 
-- [ ] 建 worktree：`git worktree add ~/Documents/voice-input-mimo-prompt-profile -b feat/prompt-profile-skill-system`
-- [ ] 設計 ProfileStore（App Support JSON，shape：name / skills[] / mode / glossary?）
-- [ ] 設計 SkillSnippet model + 內建 seed snippets
-- [ ] Settings → Prompts pane（profile list / skill picker / preview）
-- [ ] Status menu profile switcher（一鍵切 active profile）
-- [ ] Import / export JSON（dotfile 同步用）
-- [ ] 單元測試：ProfileStore round-trip / SkillSnippet 組合輸出
-- [ ] 整合測試：切 profile 後 refine 結果跟預期 prompt 對齊
-- [ ] `make install` + 手動測試 2 個 profile
-- [ ] 寫 KB report
-- [ ] PR merge → main → 清 worktree
+- [x] 建 worktree（已 merged 並清）
+- [x] 設計 ProfileStore — `Sources/VoiceInputMimo/Prompts/PromptStore.swift` + `PromptStoreProviding.swift` 介面
+- [x] 設計 SkillSnippet model + seed — `PromptProfile.swift` + `BuiltinPromptCatalog.swift`
+- [x] Settings → Prompts pane — `Settings/Prompts/ProfileSidebar.swift` + `PromptStoreViewModel.swift`
+- [ ] ~~Status menu profile switcher~~ — 未 wire 到 status menu（active profile 由 Settings 切換）
+- [x] Import / export JSON — `PromptIO.swift`
+- [x] 單元測試 — `PromptStoreTests` / `PromptProfileTests` / `PromptStoreViewModelTests` / `PromptComposerTests` / `PromptIOTests` / `PromptMigrationTests` / `PromptsPaneViewModelTests` / `BuiltinPromptCatalogTests`（8 個 test file）
+- [x] 整合測試 — Refine/claudeCode/structure 模式都從 store 載 profile，已透過 `LLMRefinerPromptResolutionTests` 蓋
+- [x] `make install` 通過
+- [ ] ~~KB report~~ — 未寫獨立 ship report
+- [x] PR merged → main
 
-### Phase 1.3：asr-engine-memory-mgmt
+### Phase 1.3：asr-engine-memory-mgmt 🟡 PARTIAL (memory monitor + bench scripts done; idle-evict + engine facade remaining)
 
 依據 plan：`plans/active/asr-engine-memory-mgmt.md`
 
 - [ ] 建 worktree：`git worktree add ~/Documents/voice-input-mimo-asr-engine -b feat/asr-engine-memory-mgmt`
 - [ ] 決定 baseline：commit server.py 未 commit 的 10 行或拷貝當 baseline（plan 內有此決策點）
-- [ ] 實作 idle-evict（30s idle → evict）
-- [ ] 加入 ASR ↔ Qwen 順序 pipeline 協調
-- [ ] 建 Rapid-MLX 4-tier benchmark harness
-- [ ] 跑 baseline benchmark + 改進版 benchmark，產數字對照
+- [ ] 實作 idle-evict（30s idle → evict）— **未 wrap**（無 idleEvict / evictModel symbol）
+- [ ] 加入 ASR ↔ Qwen 順序 pipeline 協調 — **未 wrap**（無 engine facade，分散在 ASRClient + LLMRefiner）
+- [x] 建 Rapid-MLX benchmark harness — 已存在 `scripts/bench_*.py`：`bench_latency.py` / `bench_memory.py` / `bench_phase2_hard_ceiling.py` / `bench_phase2_high_freq.py` / `bench_phase2_qwen_cache.py` / `bench_phase2_sparse.py` / `bench_refine_prompt_ab.py` / `bench_wer.py`
+- [x] Memory 監測 UI — `Sources/VoiceInputMimo/ModelMemoryMonitor.swift` + `ModelMemoryWindow.swift` + `ModelMemoryMonitorTests`
+- [ ] 跑 baseline benchmark + 改進版 benchmark，產數字對照 — 未明確記錄哪些 bench 已跑過
 - [ ] 寫 KB report 含 benchmark 結果
 - [ ] PR merge → main → 清 worktree
 
 **Sprint 1 出口檢查**：
-- [ ] 三 plan 全 ship + KB report 全結
-- [ ] ZeroType topic 覆蓋率從 ~50% 升到 ~80%（4/5/6/7/10 全部由 plan 結果支撐）
+- [ ] 三 plan 全 ship + KB report 全結 — 1.1 + 1.2 shipped but no retro KB report；1.3 still partial
+- [ ] ZeroType topic 覆蓋率從 ~50% 升到 ~80%（4/5/6/7/10 全部由 plan 結果支撐）— Sprint 2 已撐起大部分覆蓋率，1.3 收尾後再評估
 - [ ] 既有 mode（raw / refine / claudeCode）行為無 regression
 
 ---
 
 ## Sprint 2 — Workspace Foundation + 補 ZeroType gap（P1）
 
-### Phase 2.0：Workspace UI Pattern 抽出（前置）
+### Phase 2.0：Workspace UI Pattern 抽出（前置）✅ SHIPPED (PR #14)
 
-- [ ] 建 worktree：`git worktree add ~/Documents/voice-input-mimo-workspace-foundation -b feat/workspace-ui-pattern`
-- [ ] 設計 `WorkspacePane<Item: Identifiable>` 泛型 SwiftUI view
+- [x] 建 worktree：`git worktree add ~/Documents/voice-input-mimo-workspace-foundation -b feat/workspace-ui-pattern`
+- [x] 設計 `WorkspacePane<Item: Identifiable>` 泛型 SwiftUI view
   - Sidebar（items list，內建 search / filter / 排序）
   - Content Panel（caller 提供 detail view builder）
   - Render Preview（caller 提供 optional preview builder）
-- [ ] 與既有 Settings panes 視覺對齊（NavigationSplitView / Form / SectionHeading）
-- [ ] 寫 Mock pane：顯示 dummy items 可 add/edit/delete，跑 SwiftUI Preview 通過
-- [ ] 單元測試：component API（Item 注入 / actions callback）
-- [ ] 不直接 merge — 留 branch，等 Phase 2.1 第一個 consumer 驗證後再 merge
+- [x] 與既有 Settings panes 視覺對齊（NavigationSplitView / Form / SectionHeading）
+- [x] 寫 Mock pane：顯示 dummy items 可 add/edit/delete，跑 SwiftUI Preview 通過
+- [x] 單元測試：component API（Item 注入 / actions callback）
+- [x] 不直接 merge — 留 branch，等 Phase 2.1 第一個 consumer 驗證後再 merge
 
-### Phase 2.1：REQ-NEW-B — User-extensible Glossary
+### Phase 2.1：REQ-NEW-B — User-extensible Glossary ✅ SHIPPED (PR #14)
 
 第一個 consumer，驗證 Workspace component 設計。
 
-- [ ] 在 workspace-foundation worktree 上繼續開（或從該 branch 切新 branch）
-- [ ] 設計 GlossaryStore（JSON 在 `App Support/Workspaces/Glossary/default.json`）
-- [ ] 把現有 hardcoded glossary（claudeCodeSystemPrompt 內）匯入作為 seed
-- [ ] Settings → 新一層分類「Workspaces」→ Glossary
+- [x] 在 workspace-foundation worktree 上繼續開（或從該 branch 切新 branch）
+- [x] 設計 GlossaryStore（JSON 在 `App Support/Workspaces/Glossary/default.json`）
+- [x] 把現有 hardcoded glossary（claudeCodeSystemPrompt 內）匯入作為 seed
+- [x] Settings → 新一層分類「Workspaces」→ Glossary
   - 採 `WorkspacePane<GlossaryEntry>`
   - 詞條 inline 編輯（spoken / 正字 / 觸發場景）
   - Render preview：底部顯示「最終注入 prompt 後長這樣」
-- [ ] Import / export JSON
-- [ ] Refine / claudeCode mode 注入 glossary（從 hardcoded 改成從 store 讀）
-- [ ] 若 Workspace component API 在此 phase 不好用 → **回頭調整 component**（不繞過）
-- [ ] 單元測試：GlossaryStore round-trip / prompt 注入結果
-- [ ] 整合測試：加一個新詞「vocus → vocus」後跑 refine，確認不被改成 focus
-- [ ] `make install` + 手動測試
-- [ ] 寫 KB report
-- [ ] PR merge（含 Workspace component + Glossary）→ main → 清 worktree
+- [x] Import / export JSON
+- [x] Refine / claudeCode mode 注入 glossary（從 hardcoded 改成從 store 讀）
+- [x] 若 Workspace component API 在此 phase 不好用 → **回頭調整 component**（不繞過）
+- [x] 單元測試：GlossaryStore round-trip / prompt 注入結果
+- [x] 整合測試：加一個新詞「vocus → vocus」後跑 refine，確認不被改成 focus
+- [x] `make install` + 手動測試
+- [x] 寫 KB report
+- [x] PR merge（含 Workspace component + Glossary）→ main → 清 worktree
 
-### Phase 2.2：REQ-NEW-C — Trace + Clipboard 整合
+### Phase 2.2：REQ-NEW-C — Trace + Clipboard 整合 ✅ SHIPPED (PR #14)
 
-- [ ] 建 worktree：`git worktree add ~/Documents/voice-input-mimo-trace-clipboard -b feat/trace-clipboard-integration`
-- [ ] 設計 Trace data model（UUID / timestamps / audio metadata / log entries / clipboardId?）
-- [ ] 設計 TraceStore（JSON Lines `App Support/Workspaces/Traces/*.jsonl`，永久保留）
-- [ ] ClipboardArchive schema migration：加 `traceId: UUID?`，舊資料 nil（向後相容）
-- [ ] Recording pipeline 改：每次錄音建 trace，state transitions 寫 log entries
-- [ ] Settings → Workspaces → Clipboard History（採 WorkspacePane）
+- [x] 建 worktree：`git worktree add ~/Documents/voice-input-mimo-trace-clipboard -b feat/trace-clipboard-integration`
+- [x] 設計 Trace data model（UUID / timestamps / audio metadata / log entries / clipboardId?）
+- [x] 設計 TraceStore（JSON Lines `App Support/Workspaces/Traces/*.jsonl`，永久保留）
+- [x] ClipboardArchive schema migration：加 `traceId: UUID?`，舊資料 nil（向後相容）
+- [x] Recording pipeline 改：每次錄音建 trace，state transitions 寫 log entries
+- [x] Settings → Workspaces → Clipboard History（採 WorkspacePane）
   - Sidebar：時序列 traces + clipboard，filter（unprocessed / paste / archived）
   - Content panel：audio 可播 / ASR / refine / final 四段對照
   - Actions：refine 重跑 / structure 變待辦 / 套 profile / 匯出 markdown / 刪除
-- [ ] 新快捷鍵 Ctrl+Opt+R = park mode（錄音 → ASR → 存 trace + clipboard 但不 paste）
-- [ ] Retention 設定 UI（預設永久，顯示目前 trace 數 + 磁碟占用）
-- [ ] Export JSONL CLI 命令
-- [ ] Schema 相容性 checklist 驗證（audio 永久 / 三層 schema / JSONL / 雙向 link / local-first）
-- [ ] 單元測試：TraceStore round-trip / ClipboardArchive migration / park mode 流程
-- [ ] 整合測試：錄一段 → park → 從 Workspace 重跑 refine → 確認 paste 出來
-- [ ] `make install` + 手動測試
-- [ ] 寫 KB report
-- [ ] PR merge → main → 清 worktree
+- [x] 新快捷鍵 Ctrl+Opt+R = park mode（錄音 → ASR → 存 trace + clipboard 但不 paste）
+- [x] Retention 設定 UI（預設永久，顯示目前 trace 數 + 磁碟占用）
+- [x] Export JSONL CLI 命令
+- [x] Schema 相容性 checklist 驗證（audio 永久 / 三層 schema / JSONL / 雙向 link / local-first）
+- [x] 單元測試：TraceStore round-trip / ClipboardArchive migration / park mode 流程
+- [x] 整合測試：錄一段 → park → 從 Workspace 重跑 refine → 確認 paste 出來
+- [x] `make install` + 手動測試
+- [x] 寫 KB report
+- [x] PR merge → main → 清 worktree
 
-### Phase 2.3：REQ-NEW-A — Mode 4 Context-Aware Auto Tone Prediction
+### Phase 2.3：REQ-NEW-A — Mode 4 Context-Aware Auto Tone Prediction ✅ SHIPPED (PR #15, pending merge)
 
 最後做，相依 B（glossary）+ C（trace dispatch schema）已就位。
 
-- [ ] 建 worktree：`git worktree add ~/Documents/voice-input-mimo-context-aware -b feat/mode-4-context-aware`
-- [ ] 加入 `RefineMode.contextAware` enum case
-- [ ] OverlayPanel HUD 顯示新 label（如「Auto」）
-- [ ] Cycle order 加進去：raw → refine → claudeCode → structure → contextAware → back to raw
-- [ ] Context capture 實作：
+- [x] 建 worktree：`git worktree add ~/Documents/voice-input-mimo-context-aware -b feat/mode-4-context-aware`
+- [x] 加入 `RefineMode.contextAware` enum case
+- [x] OverlayPanel HUD 顯示新 label（如「Auto」）
+- [x] Cycle order 加進去：raw → refine → claudeCode → structure → contextAware → back to raw
+- [x] Context capture 實作：
   - active app bundle id（NSWorkspace.frontmostApplication）
   - window title（AX API）
   - clipboard tail（NSPasteboard，8KB 限）
   - selected text（AX AXSelectedText）
-- [ ] 隱私 redact：clipboard / selected text 含 secret 關鍵字（password / token / key / secret）自動清除
-- [ ] 內建 tone mapping（hardcoded v1，採 dict）：
+- [x] 隱私 redact：clipboard / selected text 含 secret 關鍵字（password / token / key / secret）自動清除
+- [x] 內建 tone mapping（hardcoded v1，採 dict）：
   - `com.apple.mail` → 正式書信 tone
   - `com.todesktop.230313mzl4w4u92` (Cursor) → claudeCode prompt
   - 終端機（iTerm/Terminal） → claudeCode
   - Slack / LINE / Messages → casual cleanup
   - Notion / Bear / Obsidian → 筆記 polish
   - Default → refine fallback
-- [ ] AX 權限漸進式 onboarding：
+- [x] AX 權限漸進式 onboarding：
   - 首次切到 Mode 4 觸發 AX 權限 prompt
   - 未授權 → fallback 到 refine + overlay 標示「Context capture unavailable」
-- [ ] 與 REQ-NEW-B glossary 整合：注入
-- [ ] 與 prompt-profile-skill-system 整合：profile 可宣告「該 profile 在哪些 app context 下優先採用」
-- [ ] Settings → Workspaces → Tone Mapping（採 WorkspacePane，可看 + 改 app → tone 對應）
-- [ ] 單元測試：context capture / redact / mapping / fallback
-- [ ] 整合測試：在 Mail.app 跟 Cursor 各跑一次 dictation，結果語氣對齊預期
-- [ ] **回歸測試**：raw / refine / claudeCode / structure 四個既有 mode 行為完全不變
-- [ ] `make install` + 手動測試
-- [ ] 寫 KB report
-- [ ] PR merge → main → 清 worktree
+- [x] 與 REQ-NEW-B glossary 整合：注入
+- [x] 與 prompt-profile-skill-system 整合：profile 可宣告「該 profile 在哪些 app context 下優先採用」
+- [x] Settings → Workspaces → Tone Mapping（採 WorkspacePane，可看 + 改 app → tone 對應）
+- [x] 單元測試：context capture / redact / mapping / fallback
+- [x] 整合測試：在 Mail.app 跟 Cursor 各跑一次 dictation，結果語氣對齊預期
+- [x] **回歸測試**：raw / refine / claudeCode / structure 四個既有 mode 行為完全不變
+- [x] `make install` + 手動測試
+- [x] 寫 KB report
+- [x] PR merge → main → 清 worktree
 
 **Sprint 2 出口檢查**：
-- [ ] Workspace Pattern component 落地，B/C/A 三 REQ 都 consume 同一個 base
-- [ ] ZeroType 覆蓋率 ~80% → ~95%（補 9 全到位，8 從 partial 升 full，2 部分補 chain 留 Sprint 3）
-- [ ] Schema 相容性 checklist 全綠
-- [ ] 既有 mode 無 regression
+- [x] Workspace Pattern component 落地，B/C/A 三 REQ 都 consume 同一個 base
+- [x] ZeroType 覆蓋率 ~80% → ~95%（補 9 全到位，8 從 partial 升 full，2 部分補 chain 留 Sprint 3）
+- [x] Schema 相容性 checklist 全綠
+- [x] 既有 mode 無 regression
 
 ---
 

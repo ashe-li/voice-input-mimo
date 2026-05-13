@@ -72,19 +72,19 @@ parent_plan: plans/active/zerotype-aligned-roadmap.md
 - [ ] ~~KB report~~ — 未寫獨立 ship report
 - [x] PR merged → main
 
-### Phase 1.3：asr-engine-memory-mgmt 🟡 PARTIAL (memory monitor + bench scripts done; idle-evict + engine facade remaining)
+### Phase 1.3：asr-engine-memory-mgmt 🟡 MOSTLY SHIPPED (Phase 0/1/2 done; Phase 3 harness comparison report remaining)
 
 依據 plan：`plans/active/asr-engine-memory-mgmt.md`
 
-- [ ] 建 worktree：`git worktree add ~/Documents/voice-input-mimo-asr-engine -b feat/asr-engine-memory-mgmt`
-- [ ] 決定 baseline：commit server.py 未 commit 的 10 行或拷貝當 baseline（plan 內有此決策點）
-- [ ] 實作 idle-evict（30s idle → evict）— **未 wrap**（無 idleEvict / evictModel symbol）
-- [ ] 加入 ASR ↔ Qwen 順序 pipeline 協調 — **未 wrap**（無 engine facade，分散在 ASRClient + LLMRefiner）
-- [x] 建 Rapid-MLX benchmark harness — 已存在 `scripts/bench_*.py`：`bench_latency.py` / `bench_memory.py` / `bench_phase2_hard_ceiling.py` / `bench_phase2_high_freq.py` / `bench_phase2_qwen_cache.py` / `bench_phase2_sparse.py` / `bench_refine_prompt_ab.py` / `bench_wer.py`
-- [x] Memory 監測 UI — `Sources/VoiceInputMimo/ModelMemoryMonitor.swift` + `ModelMemoryWindow.swift` + `ModelMemoryMonitorTests`
-- [ ] 跑 baseline benchmark + 改進版 benchmark，產數字對照 — 未明確記錄哪些 bench 已跑過
-- [ ] 寫 KB report 含 benchmark 結果
-- [ ] PR merge → main → 清 worktree
+- [x] 建 worktree — 2026-05-14 建後發現整套 engine/ 已 ship，已移除 worktree + 刪 branch
+- [x] 決定 baseline — server.py 保留為 baseline 參照（仍在 repo / 可隨時起 8765 跑）
+- [x] 實作 idle-evict — `engine/lifecycle.py` + `engine/adaptive_idle.py`（L1/180s, L2/420s, L3/900s adaptive）
+- [x] 加入 ASR ↔ Qwen 順序 pipeline 協調 — `engine/qwen_remote.py` + `engine/server.py` 整合
+- [x] 建 Rapid-MLX benchmark harness — `scripts/bench_*.py` 10 個 bench 腳本
+- [x] Memory 監測 UI — `Sources/VoiceInputMimo/ModelMemoryMonitor.swift` + `ModelMemoryWindow.swift` + tests
+- [ ] 跑 baseline benchmark vs engine benchmark 產數字對照 — **真正剩下的工作**（Phase 3 harness comparison）
+- [ ] 寫 KB retro report 含 production engine.log 真實 idle-evict 數字
+- [x] PR merged → main（engine/ 模組已在 main 並 production-deploy）
 
 **Sprint 1 出口檢查**：
 - [ ] 三 plan 全 ship + KB report 全結 — 1.1 + 1.2 shipped but no retro KB report；1.3 still partial

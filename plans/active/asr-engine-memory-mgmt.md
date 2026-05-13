@@ -1,17 +1,21 @@
 ---
 title: ASR Engine + Cross-Process Memory Coordination — Implementation Plan
 slug: asr-engine-memory-mgmt
-status: draft
+status: Phase 0/1/2 SHIPPED (out-of-order, in production via engine.server:app on 8766); Phase 3 (harness + comparison report) remaining
 created: 2026-05-08
-worktree: ~/Documents/voice-input-mimo-asr-engine
+revised: 2026-05-14 (reality check: engine/ module 整套已 production-deploy — 5 files / 1139 lines / 59 cold-loads + 57 evicts + 41 qwen idles 在 engine.log 有 trace)
+worktree: ~/Documents/voice-input-mimo-asr-engine (already created but unused — Phase 0-2 already shipped on main; remove if Phase 3 not started)
 branch: feat/asr-engine-memory-mgmt
 parent_repo: ~/Documents/voice-input-mimo
 related_kb:
   - knowledge-base/wiki/patterns/asr-engine-vs-raw-python-speedup-benchmarks.md
   - knowledge-base/wiki/patterns/inference-engine-regression-harness-4-tier-design.md
   - knowledge-base/wiki/patterns/stack-archaeology-confirm-actual-layer-before-optimize.md
+  - knowledge-base/wiki/patterns/plan-checklist-todo-not-codebase-truth-grep-first.md
   - knowledge-base/reports/2026-05-08-voice-input-mimo-stack-archaeology-and-rapid-mlx-harness-analysis.md
 ---
+
+> **Reality-check note 2026-05-14**：本 plan 寫於 2026-05-08，但 Phase 0-2 在後續 session 已實作並 production-deploy（`engine/` 模組 5 個檔案、production 用 `engine.server:app` 8 port 8766、`engine.log` 有 idle-evict 真實事件）。本 plan 內 Phase 0/1/2 全當 SHIPPED 處理，剩 Phase 3 harness + comparison report 未做（需要 stop production server 跑 baseline + engine 兩邊 bench 才能產 comparison）。
 
 # ASR Engine + Cross-Process Memory Coordination — Implementation Plan
 
@@ -279,7 +283,7 @@ cer:                   { regression_pct: 0,  improvement_pct: 5 }
 
 ## Phases
 
-### Phase 0：Baseline（Day 1）
+### Phase 0：Baseline（Day 1） ✅ EFFECTIVELY DONE (production engine.server 已 deploy；server.py 仍可作為 baseline 參考)
 
 - [ ] 處理 server.py 未 commit 變更（commit 或 copy 進 worktree）
 - [ ] 準備 fixtures：3-5 個 zh-TW + 中英夾雜 audio + golden transcript
@@ -287,7 +291,7 @@ cer:                   { regression_pct: 0,  improvement_pct: 5 }
 - [ ] 寫入 `harness/baselines/server-py-baseline.json`
 - [ ] **Gate**：確認量出的數字符合直覺（RSS ~5GB、idle 不降）— 不對的話先 debug 量測，不要急著寫 engine
 
-### Phase 1：Memory Tracker + LazyModel + ASR Side（Day 2-3）
+### Phase 1：Memory Tracker + LazyModel + ASR Side（Day 2-3） ✅ SHIPPED (engine/memory.py 147 lines + engine/lifecycle.py 173 lines + engine/adaptive_idle.py 105 lines — L1/180s, L2/420s, L3/900s 三段 adaptive idle)
 
 - [ ] `engine/memory.py` 完成 + 自測 trim/cap 真的有效
 - [ ] `engine/lifecycle.py` LazyModel 完成 + idle evict loop 自測
@@ -295,7 +299,7 @@ cer:                   { regression_pct: 0,  improvement_pct: 5 }
 - [ ] `bench_memory.py` 量新 engine ASR-only：should see steady_idle drop
 - [ ] **Gate**：ASR-only steady_idle_rss_mb 應 < 1GB（vs baseline ~5GB）
 
-### Phase 2：Qwen Remote Control（Day 4-5）
+### Phase 2：Qwen Remote Control（Day 4-5） ✅ SHIPPED (engine/qwen_remote.py 189 lines — qwen idle_expired + cache_clear 已在 production 觸發 41 次)
 
 - [ ] 探查 Rapid-MLX 真實支援的 admin 介面
 - [ ] `engine/qwen_remote.py` 用第一個可行方案實作
@@ -303,7 +307,7 @@ cer:                   { regression_pct: 0,  improvement_pct: 5 }
 - [ ] `bench_pipeline_e2e.py` 量端到端
 - [ ] **Gate**：pipeline_e2e_ms 不能比 baseline 慢 5% 以上 + steady_idle 真的會降
 
-### Phase 3：Harness + Comparison Report（Day 6-7）
+### Phase 3：Harness + Comparison Report（Day 6-7） ⏳ REMAINING (需要 stop production + 5 fixtures + bench_memory/latency 在 server.py 跟 engine.server 兩邊跑 + compare 寫 markdown report；30 分鐘 - 1 小時 dictation downtime)
 
 - [ ] `harness/thresholds.yaml` finalize
 - [ ] `compare_server_vs_engine.py` 雙 port 自動跑 + 輸出 markdown report

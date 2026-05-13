@@ -24,6 +24,14 @@ struct ShortcutsPane: View {
             }
 
             Section {
+                Toggle("Enable Ctrl+Option+← / → to cycle output mode",
+                       isOn: $vm.cycleHotkeyEnabled)
+            } header: {
+                SectionHeading("Output mode cycle",
+                               subtitle: "Switch between raw / refine / claudeCode / structure")
+            }
+
+            Section {
                 HStack {
                     Spacer()
                     Button("Save") { vm.save() }

@@ -632,9 +632,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshOutputModeMenu()
     }
 
-    /// Output mode in the order used by the fn+arrow cycle hotkey. Matches the
-    /// menu-bar reading order (top→bottom) so users build a consistent mental
-    /// model: fn+→ moves "down the menu", fn+← moves "up".
+    /// Output mode in the order used by the Ctrl+Option+arrow cycle hotkey.
+    /// Matches the menu-bar reading order (top→bottom) so users build a
+    /// consistent mental model: → moves "down the menu", ← moves "up".
     private enum OutputModeChoice: CaseIterable {
         case raw          // ASR-only, LLM disabled
         case refine       // ZH cleanup

@@ -41,6 +41,7 @@ struct ShortcutBinding: Equatable {
 
     static let primaryKey = "shortcutPrimaryPreset"
     static let secondaryKey = "shortcutSecondaryPreset"
+    static let cycleHotkeyKey = "cycleHotkeyEnabled"
 
     let preset: Preset
 
@@ -64,6 +65,16 @@ struct ShortcutBinding: Equatable {
     static func save(primary: Preset, secondary: Preset) {
         UserDefaults.standard.set(primary.rawValue, forKey: primaryKey)
         UserDefaults.standard.set(secondary.rawValue, forKey: secondaryKey)
+    }
+
+    /// Ctrl+Option+arrow output-mode cycle hotkey. Default true (existing
+    /// behavior) when the key has never been written.
+    static func loadCycleHotkeyEnabled() -> Bool {
+        (UserDefaults.standard.object(forKey: cycleHotkeyKey) as? Bool) ?? true
+    }
+
+    static func saveCycleHotkeyEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: cycleHotkeyKey)
     }
 
     func matchesKeyDown(event: CGEvent) -> Bool {

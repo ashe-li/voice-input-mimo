@@ -24,6 +24,22 @@ struct ShortcutsPane: View {
             }
 
             Section {
+                Toggle("Enable Ctrl+Option+← / → to cycle output mode",
+                       isOn: $vm.cycleHotkeyEnabled)
+            } header: {
+                SectionHeading("Output mode cycle",
+                               subtitle: "Switch between raw / refine / claudeCode / structure")
+            }
+
+            Section {
+                Toggle("Enable Ctrl+Option+R to record without pasting",
+                       isOn: $vm.parkHotkeyEnabled)
+            } header: {
+                SectionHeading("Park mode",
+                               subtitle: "Hold to record + transcribe; archives to history without paste")
+            }
+
+            Section {
                 HStack {
                     Spacer()
                     Button("Save") { vm.save() }

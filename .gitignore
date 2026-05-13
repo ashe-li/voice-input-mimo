@@ -47,3 +47,7 @@ VoiceInputMimo.app/
 
 # DMG distribution artifacts (built by `make dmg`)
 dist/
+
+# Personal Glossary seed JSON — kept locally for Import… into the app,
+# not shipped in release. Re-generate via KB scan or by hand as needed.
+glossary-seeds/

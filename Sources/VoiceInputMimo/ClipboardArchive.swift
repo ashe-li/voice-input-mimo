@@ -36,6 +36,19 @@ final class ClipboardArchive {
         let timestamp: String
         let kind: EntryKind
         let content: String
+        /// Optional cross-reference to a `TraceEntry.id`. Serialised in the
+        /// header as `trace=<id>`. Nil for entries saved before the trace
+        /// pipeline existed (legacy) or for saves that don't originate from
+        /// a recording session.
+        let traceId: String?
+
+        init(timestamp: String, kind: EntryKind, content: String, traceId: String? = nil) {
+            self.timestamp = timestamp
+            self.kind = kind
+            self.content = content
+            self.traceId = traceId
+        }
+
         var preview: String {
             let oneLine = content
                 .replacingOccurrences(of: "\n", with: " ")
@@ -69,30 +82,42 @@ final class ClipboardArchive {
     // MARK: - Write
 
     /// Save a pre-paste snapshot. Skips if disabled or text empty/nil.
-    func save(_ text: String?) {
-        guard let text else { return }
-        saveContent(text, kind: .clipboard)
+    /// `traceId` lets the caller cross-reference back to the originating
+    /// `TraceEntry`; nil for non-pipeline saves. Returns the ISO8601
+    /// timestamp the entry was stored under, or nil if the save was a
+    /// no-op (disabled or empty text), so the trace pipeline can store
+    /// it back in `TraceEntry.clipboardTimestamp`.
+    @discardableResult
+    func save(_ text: String?, traceId: String? = nil) -> String? {
+        guard let text else { return nil }
+        return saveContent(text, kind: .clipboard, traceId: traceId)
     }
 
     /// Save the voice-input session immediately, instead of waiting for the next
     /// paste to capture the previous clipboard. This preserves both ASR source
-    /// text and final output for each session.
-    func saveSession(zh: String, english: String) {
+    /// text and final output for each session. Returns the stored timestamp;
+    /// see `save(_:traceId:)` for rationale.
+    @discardableResult
+    func saveSession(zh: String, english: String, traceId: String? = nil) -> String? {
         let content = Self.formatSessionContent(zh: zh, english: english)
-        saveContent(content, kind: .session)
+        return saveContent(content, kind: .session, traceId: traceId)
     }
 
-    private func saveContent(_ text: String, kind: EntryKind) {
+    @discardableResult
+    private func saveContent(_ text: String, kind: EntryKind, traceId: String? = nil) -> String? {
         let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard isEnabled, !cleaned.isEmpty else { return }
+        guard isEnabled, !cleaned.isEmpty else { return nil }
 
         let stamp = ISO8601DateFormatter().string(from: Date())
-        let entry = Self.serialize(Entry(timestamp: stamp, kind: kind, content: cleaned))
+        let entry = Self.serialize(
+            Entry(timestamp: stamp, kind: kind, content: cleaned, traceId: traceId)
+        )
 
         let existing = (try? String(contentsOf: archiveURL, encoding: .utf8)) ?? ""
         let combined = entry + existing
         let trimmed = Self.truncate(combined, to: Self.maxBytes)
         try? trimmed.write(to: archiveURL, atomically: true, encoding: .utf8)
+        return stamp
     }
 
     // MARK: - Read
@@ -103,6 +128,13 @@ final class ClipboardArchive {
             return []
         }
         return Self.parse(raw)
+    }
+
+    /// Reverse lookup: find the clipboard entry produced by the given trace.
+    /// Returns nil if no entry references this trace id (e.g. archive trimmed
+    /// past the 1 MB cap, or trace was park-only without a paste).
+    func entryForTrace(_ traceId: String) -> Entry? {
+        entries().first { $0.traceId == traceId }
     }
 
     /// Restore an entry's content to the system pasteboard. Marks as transient
@@ -170,7 +202,7 @@ final class ClipboardArchive {
                 break
             }
             let headerBody = String(raw[afterPrefix..<headerEnd.lowerBound])
-            let (stamp, kind) = Self.parseHeaderBody(headerBody)
+            let (stamp, kind, traceId) = Self.parseHeaderBody(headerBody)
             let contentStart = headerEnd.upperBound
 
             // Content runs to next "\n─── " or EOF
@@ -188,7 +220,7 @@ final class ClipboardArchive {
                 content.removeLast()
             }
 
-            entries.append(Entry(timestamp: stamp, kind: kind, content: content))
+            entries.append(Entry(timestamp: stamp, kind: kind, content: content, traceId: traceId))
             cursor = contentEnd
         }
         return entries
@@ -219,17 +251,35 @@ final class ClipboardArchive {
     }
 
     private static func serialize(_ entry: Entry) -> String {
-        let header = "\(entry.timestamp) | \(entry.kind.rawValue)"
+        var header = "\(entry.timestamp) | \(entry.kind.rawValue)"
+        if let id = entry.traceId, !id.isEmpty {
+            header += " | trace=\(id)"
+        }
         return "\(separator)\(header) \(separator)\n\(entry.content)\(entryTerminator)"
     }
 
-    private static func parseHeaderBody(_ raw: String) -> (String, EntryKind) {
-        let parts = raw.split(separator: "|", maxSplits: 1, omittingEmptySubsequences: false)
-        let stamp = parts.first.map { String($0).trimmingCharacters(in: .whitespaces) } ?? raw
-        let kind = parts.dropFirst().first
-            .map { String($0).trimmingCharacters(in: .whitespaces) }
-            .flatMap(EntryKind.init(rawValue:)) ?? .clipboard
-        return (stamp, kind)
+    /// Parse a header body like `2026-05-14T00:00:00Z | session | trace=trace-abc123`.
+    /// The first segment is always the timestamp. Remaining segments are
+    /// recognised by shape — `trace=<id>` populates traceId, anything matching
+    /// an `EntryKind` rawValue sets kind. Order-independent for extension keys
+    /// so future header fields don't break old parsers.
+    private static func parseHeaderBody(_ raw: String) -> (String, EntryKind, String?) {
+        let parts = raw.split(separator: "|").map {
+            String($0).trimmingCharacters(in: .whitespaces)
+        }
+        guard let first = parts.first else { return (raw, .clipboard, nil) }
+        let stamp = first
+        var kind: EntryKind = .clipboard
+        var traceId: String? = nil
+        for part in parts.dropFirst() {
+            if let valueRange = part.range(of: "trace=") {
+                let id = String(part[valueRange.upperBound...])
+                if !id.isEmpty { traceId = id }
+            } else if let parsedKind = EntryKind(rawValue: part) {
+                kind = parsedKind
+            }
+        }
+        return (stamp, kind, traceId)
     }
 
     /// Trim from end to fit byte cap, snapping to the last entry boundary.

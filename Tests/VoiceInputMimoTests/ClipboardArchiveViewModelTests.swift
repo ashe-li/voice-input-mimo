@@ -137,6 +137,26 @@ final class ClipboardArchiveViewModelTests: XCTestCase {
         XCTAssertTrue(vm.entries.isEmpty)
     }
 
+    func test_reload_propagatesTraceIdToViewItem() {
+        let archive = MockClipboardArchive(entries: [
+            ClipboardArchive.Entry(
+                timestamp: "2026-05-14T10:00:00Z",
+                kind: .session,
+                content: "linked",
+                traceId: "trace-abc12345"
+            ),
+            ClipboardArchive.Entry(
+                timestamp: "2026-05-14T09:00:00Z",
+                kind: .clipboard,
+                content: "unlinked"
+            )
+        ])
+        let vm = ClipboardArchiveViewModel(archive: archive)
+        vm.reload()
+        XCTAssertEqual(vm.entries[0].traceId, "trace-abc12345")
+        XCTAssertNil(vm.entries[1].traceId)
+    }
+
     func test_unparseableTimestamp_fallsIntoOlderBucket() {
         let archive = MockClipboardArchive(entries: [
             entry("not-a-timestamp", .session, "weird")

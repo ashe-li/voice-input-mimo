@@ -8,9 +8,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let audioRecorder = AudioRecorder()
     private let textInjector = TextInjector()
     private lazy var overlayPanel = OverlayPanel()
+    private let tracer = RecordingTracer()
 
     private var isEnabled = true
     private var isRecording = false
+    /// Set during a Ctrl+Option+R recording — gates the post-ASR
+    /// pipeline to skip LLM + paste and route to a park trace instead.
+    private var isParkMode = false
 
     private var enableMenuItem: NSMenuItem!
     private var outputModeMenuItem: NSMenuItem!
@@ -129,6 +133,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         keyMonitor.onFnUp = { [weak self] in self?.fnUp() }
         keyMonitor.onCycleNext = { [weak self] in self?.cycleOutputMode(direction: 1) }
         keyMonitor.onCyclePrev = { [weak self] in self?.cycleOutputMode(direction: -1) }
+        keyMonitor.onParkDown = { [weak self] in self?.parkDown() }
+        keyMonitor.onParkUp = { [weak self] in self?.parkUp() }
         NotificationCenter.default.addObserver(
             forName: .shortcutBindingDidChange, object: nil, queue: .main
         ) { [weak self] _ in self?.keyMonitor.invalidateShortcutCache() }
@@ -222,6 +228,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ASRClient.shared.cancel()
         isRecording = true
         currentZH = ""
+        tracer.begin()
 
         updateStatusIcon(recording: true)
         overlayPanel.transition(to: .recording(elapsed: 0))
@@ -240,8 +247,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let wavURL = audioRecorder.stopRecording()
         guard let wavURL else {
             overlayPanel.transition(to: .error("No audio captured"))
+            tracer.recordError("No audio captured")
+            tracer.finalize()
+            isParkMode = false
             return
         }
+        tracer.recordAudio(path: wavURL.path)
 
         // Stage 1: ASR (MiMo via :8765)
         overlayPanel.transition(to: .transcribing(elapsed: 0))
@@ -255,6 +266,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .failure(let error):
                 NSLog("[AppDelegate] ASR failed: %@", error.localizedDescription)
                 self.overlayPanel.transition(to: .error("ASR: \(error.localizedDescription)"))
+                self.tracer.recordError("ASR: \(error.localizedDescription)")
+                self.tracer.finalize()
+                self.isParkMode = false
             }
         }
     }
@@ -263,9 +277,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             overlayPanel.transition(to: .error("No speech detected"))
+            tracer.recordError("No speech detected")
+            tracer.finalize()
+            isParkMode = false
             return
         }
         currentZH = trimmed
+        tracer.recordASR(trimmed)
+
+        // Park mode short-circuit: archive + trace the ASR transcript,
+        // but no LLM refine and no paste injection. The user grabs the
+        // captured text later from clipboard history or trace UI.
+        if isParkMode {
+            completePark(trimmed)
+            return
+        }
 
         let refiner = LLMRefiner.shared
         if refiner.isEnabled && refiner.isConfigured {
@@ -320,10 +346,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 switch result {
                 case .success(let refined):
                     let final = refined.isEmpty ? trimmed : refined
+                    self.tracer.recordLLM(final, mode: activeMode.rawValue)
                     self.completeWithEnglish(final)
                 case .failure(let error):
                     NSLog("[AppDelegate] LLM failed: %@", error.localizedDescription)
                     self.overlayPanel.transition(to: .error("LLM: \(error.localizedDescription)"))
+                    // Finalize the trace now with the ASR fallback as final.
+                    // The injectImmediately closure below fires 1.2s later
+                    // and intentionally does not save to ClipboardArchive
+                    // (preserving prior behaviour); if the user records
+                    // again before then, the next `begin()` would discard
+                    // this trace, so persist eagerly.
+                    self.tracer.recordError("LLM: \(error.localizedDescription)")
+                    self.tracer.recordFinal(trimmed)
+                    self.tracer.finalize()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
                         self?.injectImmediately(trimmed)
                     }
@@ -350,7 +386,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         let translating = activeMode == .claudeCode
         overlayPanel.transition(to: .bothReady(zh: currentZH, en: english, translating: translating))
-        ClipboardArchive.shared.saveSession(zh: currentZH, english: english)
+        let stamp = ClipboardArchive.shared.saveSession(
+            zh: currentZH,
+            english: english,
+            traceId: tracer.currentTrace?.id
+        )
+        if let stamp { tracer.recordClipboard(timestamp: stamp) }
+        tracer.recordFinal(english)
+        tracer.finalize()
         injectImmediately(english)
     }
 
@@ -361,13 +404,54 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // translating=false: ASR-only path, overlay renders single line (no
         // duplicate ZH/EN rows).
         overlayPanel.transition(to: .bothReady(zh: text, en: text, translating: false))
-        ClipboardArchive.shared.saveSession(zh: text, english: text)
+        let stamp = ClipboardArchive.shared.saveSession(
+            zh: text,
+            english: text,
+            traceId: tracer.currentTrace?.id
+        )
+        if let stamp { tracer.recordClipboard(timestamp: stamp) }
+        tracer.recordFinal(text)
+        tracer.finalize()
         injectImmediately(text)
     }
 
     private func injectImmediately(_ text: String) {
         textInjector.inject(text)
         NSSound(named: .init("Pop"))?.play()
+    }
+
+    /// Park-mode completion: ASR-only transcript is archived to clipboard
+    /// history (kind=session) and the trace is finalised with mode=park.
+    /// No LLM, no paste — the user retrieves it later from history.
+    private func completePark(_ text: String) {
+        overlayPanel.transition(to: .bothReady(zh: text, en: text, translating: false))
+        let stamp = ClipboardArchive.shared.saveSession(
+            zh: text,
+            english: "",
+            traceId: tracer.currentTrace?.id
+        )
+        if let stamp { tracer.recordClipboard(timestamp: stamp) }
+        tracer.recordPark()
+        tracer.finalize()
+        NSSound(named: .init("Pop"))?.play()
+        isParkMode = false
+    }
+
+    // MARK: - Park-mode hotkey
+
+    private func parkDown() {
+        guard isEnabled, !isRecording else { return }
+        isParkMode = true
+        // Reuse fnDown's setup path so the audio + tracer + overlay
+        // boilerplate stays in one place; the divergence happens in
+        // handleTranscription where isParkMode is checked.
+        fnDown()
+    }
+
+    private func parkUp() {
+        // Same end-side as fnUp. handleTranscription routes to
+        // completePark when isParkMode is set.
+        fnUp()
     }
 
     // MARK: - Conflict detection
@@ -632,9 +716,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshOutputModeMenu()
     }
 
-    /// Output mode in the order used by the fn+arrow cycle hotkey. Matches the
-    /// menu-bar reading order (top→bottom) so users build a consistent mental
-    /// model: fn+→ moves "down the menu", fn+← moves "up".
+    /// Output mode in the order used by the Ctrl+Option+arrow cycle hotkey.
+    /// Matches the menu-bar reading order (top→bottom) so users build a
+    /// consistent mental model: → moves "down the menu", ← moves "up".
     private enum OutputModeChoice: CaseIterable {
         case raw          // ASR-only, LLM disabled
         case refine       // ZH cleanup

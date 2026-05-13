@@ -23,6 +23,8 @@ final class SettingsViewModel {
 
     var primaryShortcut: ShortcutBinding.Preset = .function
     var secondaryShortcut: ShortcutBinding.Preset = .disabled
+    var cycleHotkeyEnabled: Bool = true
+    var parkHotkeyEnabled: Bool = true
 
     // MARK: - Speech (ASR client config)
 
@@ -75,6 +77,8 @@ final class SettingsViewModel {
     func load() {
         primaryShortcut = ShortcutBinding.loadPrimary().preset
         secondaryShortcut = ShortcutBinding.loadSecondary().preset
+        cycleHotkeyEnabled = ShortcutBinding.loadCycleHotkeyEnabled()
+        parkHotkeyEnabled = ShortcutBinding.loadParkHotkeyEnabled()
 
         let asr = ASRClient.shared
         asrBaseURL = asr.baseURL
@@ -102,6 +106,8 @@ final class SettingsViewModel {
     /// thin shell's `windowWillClose`).
     func save() {
         ShortcutBinding.save(primary: primaryShortcut, secondary: secondaryShortcut)
+        ShortcutBinding.saveCycleHotkeyEnabled(cycleHotkeyEnabled)
+        ShortcutBinding.saveParkHotkeyEnabled(parkHotkeyEnabled)
         // Notify EventTap thread to drop its cached shortcut snapshot.
         NotificationCenter.default.post(name: .shortcutBindingDidChange, object: nil)
 

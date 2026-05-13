@@ -18,6 +18,25 @@ final class ShortcutBindingTests: XCTestCase {
         XCTAssertEqual(ShortcutBinding.loadAll(), [ShortcutBinding(preset: .function)])
     }
 
+    func testParkHotkeyDefaultsToTrue() {
+        let defaults = UserDefaults.standard
+        let old = defaults.object(forKey: ShortcutBinding.parkHotkeyKey)
+        defaults.removeObject(forKey: ShortcutBinding.parkHotkeyKey)
+        defer { defaults.set(old, forKey: ShortcutBinding.parkHotkeyKey) }
+        XCTAssertTrue(ShortcutBinding.loadParkHotkeyEnabled())
+    }
+
+    func testParkHotkeyRoundTrip() {
+        let defaults = UserDefaults.standard
+        let old = defaults.object(forKey: ShortcutBinding.parkHotkeyKey)
+        defer { defaults.set(old, forKey: ShortcutBinding.parkHotkeyKey) }
+
+        ShortcutBinding.saveParkHotkeyEnabled(false)
+        XCTAssertFalse(ShortcutBinding.loadParkHotkeyEnabled())
+        ShortcutBinding.saveParkHotkeyEnabled(true)
+        XCTAssertTrue(ShortcutBinding.loadParkHotkeyEnabled())
+    }
+
     func testSaveTwoShortcutPresets() {
         let defaults = UserDefaults.standard
         let oldPrimary = defaults.string(forKey: ShortcutBinding.primaryKey)

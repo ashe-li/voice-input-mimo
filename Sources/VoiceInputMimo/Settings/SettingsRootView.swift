@@ -24,6 +24,7 @@ struct SettingsRootView: View {
                 }
                 SidebarSection(title: "Workspace") {
                     sidebarRow(.prompts)
+                    sidebarRow(.glossary)
                     sidebarRow(.history)
                 }
                 SidebarSection(title: "Info") {
@@ -52,6 +53,7 @@ struct SettingsRootView: View {
         case .speech:    SpeechPane()
         case .asrServer: ASRServerPane()
         case .prompts:   PromptsPane()
+        case .glossary:  GlossaryPane()
         case .history:   HistoryPane()
         case .about:     AboutPane()
         }

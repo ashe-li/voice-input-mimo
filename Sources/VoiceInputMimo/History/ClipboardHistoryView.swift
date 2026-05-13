@@ -181,6 +181,14 @@ struct ClipboardHistoryView: View {
                     Text(entry.clockLabel)
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                    if let traceId = entry.traceId {
+                        Text("·").foregroundStyle(.secondary)
+                        Text("Trace: \(traceId)")
+                            .font(.system(size: 11, design: .monospaced))
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .help("Linked TraceEntry id")
+                    }
                     Spacer()
                     Button("Copy") { _ = vm.restore(entry) }
                         .keyboardShortcut(.defaultAction)

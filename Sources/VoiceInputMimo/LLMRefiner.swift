@@ -140,13 +140,38 @@ final class LLMRefiner {
             structureEnabled: structureModeEnabled,
             contextAwareEnabled: contextAwareModeEnabled
         )
-        // contextAware delegates to one of the explicit modes based on the
-        // frontmost-app bundle ID. The delegate decision is captured here so
-        // downstream branches (.structure router path, profile lookup, glossary
-        // injection) treat the resolved mode uniformly.
-        let resolvedMode: RefineMode = (rawMode == .contextAware)
-            ? ToneMapping.resolve(context: ContextCapture.capture())
-            : rawMode
+        // contextAware delegates either to a concrete mode (`.mode(.refine)`)
+        // or to a named workflow chain (Sprint 3.2). The workflow path
+        // bypasses the prompt-resolution / single LLM-call code below entirely
+        // — it runs the chain via WorkflowExecutor and returns the chain's
+        // final output via completion. Missing workflow falls back to refine.
+        let resolvedMode: RefineMode
+        switch Self.decideDispatch(
+            rawMode: rawMode,
+            delegate: rawMode == .contextAware
+                ? ToneMapping.resolve(context: ContextCapture.capture())
+                : nil,
+            findWorkflow: { try? WorkflowStore.shared.find(id: $0) }
+        ) {
+        case .singleMode(let m):
+            resolvedMode = m
+        case .workflow(let workflow):
+            let inputText = text
+            Task {
+                let result = await WorkflowExecutor.shared.execute(
+                    workflow: workflow,
+                    input: inputText
+                )
+                completion(.success(result.finalOutput))
+            }
+            return
+        case .workflowMissing(let workflowId):
+            // ToneRule references a workflow id that isn't in the store. Fall
+            // back to refine rather than failing the dispatch — mirrors
+            // structure mode's "router miss → defaultRefinePrompt" fallback.
+            logger.warning("ToneRule referenced missing workflow id \(workflowId, privacy: .public) — falling back to refine")
+            resolvedMode = .refine
+        }
         // For .structure mode the active profile is picked by the router based
         // on input content, not by ActiveSelection. For .refine / .claudeCode
         // it stays the user's chosen active profile.
@@ -289,11 +314,48 @@ final class LLMRefiner {
     /// Backward compatible: the gateway is OpenAI-compat so this field is
     /// silently ignored by upstream Rapid-MLX / LM Studio / ollama when the
     /// user hasn't switched their llmAPIBaseURL to the gateway yet.
+    /// Outcome of resolving `rawMode` + `ToneDelegate` into a concrete
+    /// dispatch action. Extracted so unit tests can exercise the orchestration
+    /// without going through singletons (URLSession / WorkflowStore / etc.).
+    enum DispatchDecision: Equatable {
+        case singleMode(RefineMode)
+        case workflow(Workflow)
+        case workflowMissing(workflowId: String)
+    }
+
+    /// Pure decision step for `refine()`. `delegate` is the resolved
+    /// `ToneDelegate` when `rawMode == .contextAware`, nil otherwise. The
+    /// caller supplies `findWorkflow` so tests can inject a store snapshot
+    /// instead of hitting `WorkflowStore.shared`.
+    static func decideDispatch(
+        rawMode: RefineMode,
+        delegate: ToneDelegate?,
+        findWorkflow: (String) -> Workflow?
+    ) -> DispatchDecision {
+        if rawMode != .contextAware {
+            return .singleMode(rawMode)
+        }
+        switch delegate ?? .mode(.refine) {
+        case .mode(let m):
+            return .singleMode(m)
+        case .workflow(let id):
+            if let wf = findWorkflow(id) {
+                return .workflow(wf)
+            }
+            return .workflowMissing(workflowId: id)
+        }
+    }
+
     static func gatewayMode(for refineMode: RefineMode) -> String {
         switch refineMode {
         case .refine: return "quick"
         case .claudeCode: return "default"
         case .structure: return "batch"
+        case .contextAware:
+            // Defensive — `.contextAware` is a dispatcher; refine() resolves it to
+            // a concrete mode before reaching the gateway. Mirror `.refine`'s
+            // "quick" queue if the dispatcher ever leaks through.
+            return "quick"
         }
     }
 

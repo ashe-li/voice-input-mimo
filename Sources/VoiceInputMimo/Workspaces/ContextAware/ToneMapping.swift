@@ -1,13 +1,41 @@
 import Foundation
 
-/// One mapping rule from a bundle-ID predicate to a delegated `RefineMode`.
+/// What a `ToneRule` resolves to: either a concrete `RefineMode` (existing
+/// dispatch path) or a named workflow chain (Sprint 3.2 — runs the chain
+/// via `WorkflowExecutor`). Keeping these in a sum type lets callers
+/// branch explicitly instead of overloading `RefineMode` with a fake case.
+enum ToneDelegate: Equatable, Sendable {
+    case mode(RefineMode)
+    case workflow(workflowId: String)
+}
+
+/// One mapping rule from a bundle-ID predicate to a delegated target.
 struct ToneRule: Equatable, Sendable {
     /// Match against `CapturedContext.bundleID`. Two flavors:
     /// - exact match (`"com.apple.mail"` → matches that bundle only)
-    /// - prefix match if `endsWithDot` (`"com.tinyspeck.slackmacgap."` matches
-    ///   anything starting with that string).
+    /// - prefix match if the string ends with `"."` (`"com.tinyspeck.slackmacgap."`
+    ///   matches anything starting with that string).
     let bundleIDPrefix: String
-    let delegated: RefineMode
+    let delegated: ToneDelegate
+
+    init(bundleIDPrefix: String, delegated: ToneDelegate) {
+        self.bundleIDPrefix = bundleIDPrefix
+        self.delegated = delegated
+    }
+
+    /// Back-compat convenience: lets existing rule tables stay terse with
+    /// `delegated: .refine` instead of `delegated: .mode(.refine)`. Swift
+    /// picks this overload when the second argument resolves to `RefineMode`.
+    init(bundleIDPrefix: String, delegated mode: RefineMode) {
+        self.bundleIDPrefix = bundleIDPrefix
+        self.delegated = .mode(mode)
+    }
+
+    /// Workflow-target convenience.
+    init(bundleIDPrefix: String, workflowId: String) {
+        self.bundleIDPrefix = bundleIDPrefix
+        self.delegated = .workflow(workflowId: workflowId)
+    }
 
     /// Test whether this rule matches the captured bundle. Empty / nil bundle
     /// never matches — caller falls back to default.
@@ -20,7 +48,8 @@ struct ToneRule: Equatable, Sendable {
     }
 }
 
-/// Maps a captured app context to one of the explicit `RefineMode` cases.
+/// Maps a captured app context to a `ToneDelegate` (either a concrete
+/// `RefineMode` or a workflow id reference).
 ///
 /// v1 uses a hardcoded rule list. v2 will read user-editable overrides from
 /// `App Support/Workspaces/ToneMapping/rules.json` so power users can extend
@@ -65,13 +94,13 @@ enum ToneMapping {
         .init(bundleIDPrefix: "company.thebrowser.Browser", delegated: .refine),  // Arc
     ]
 
-    /// Resolve a captured context to a delegated mode. Falls back to `.refine`
+    /// Resolve a captured context to a delegate. Falls back to `.mode(.refine)`
     /// when no rule matches (safest default — does cleanup, doesn't translate,
-    /// doesn't trigger router).
-    static func resolve(context: CapturedContext, rules: [ToneRule] = defaultRules) -> RefineMode {
+    /// doesn't trigger router or workflow).
+    static func resolve(context: CapturedContext, rules: [ToneRule] = defaultRules) -> ToneDelegate {
         for rule in rules where rule.matches(context.bundleID) {
             return rule.delegated
         }
-        return .refine
+        return .mode(.refine)
     }
 }

@@ -121,6 +121,8 @@ final class MockPromptStore: PromptStoreProviding, @unchecked Sendable {
         case .structure:
             structureProfiles.removeAll { $0.id == profile.id }
             structureProfiles.append(profile)
+        case .contextAware:
+            return
         }
     }
 
@@ -134,6 +136,7 @@ final class MockPromptStore: PromptStoreProviding, @unchecked Sendable {
         case .refine: return refineProfiles
         case .claudeCode: return claudeCodeProfiles
         case .structure: return structureProfiles
+        case .contextAware: return []
         }
     }
 
@@ -142,6 +145,7 @@ final class MockPromptStore: PromptStoreProviding, @unchecked Sendable {
         case .refine: refineProfiles.removeAll { $0.id == id }
         case .claudeCode: claudeCodeProfiles.removeAll { $0.id == id }
         case .structure: structureProfiles.removeAll { $0.id == id }
+        case .contextAware: return
         }
     }
 
@@ -178,6 +182,7 @@ final class MockPromptStore: PromptStoreProviding, @unchecked Sendable {
         case .refine: id = sel.refineProfileID
         case .claudeCode: id = sel.claudeCodeProfileID
         case .structure: id = sel.structureProfileID
+        case .contextAware: return nil
         }
         return try loadProfile(id: id, mode: mode)
     }

@@ -186,6 +186,7 @@ final class LLMRefiner {
             ],
             "temperature": resolvedTemp,
             "max_tokens": resolvedMaxTokens,
+            "mode": Self.gatewayMode(for: resolvedMode),
         ]
 
         let logTag = requestId.isEmpty ? "" : "[req=\(requestId)] "
@@ -253,6 +254,22 @@ final class LLMRefiner {
         if structureEnabled { return .structure }
         if claudeCodeEnabled { return .claudeCode }
         return .refine
+    }
+
+    /// Map our internal RefineMode to the local-llm-backend gateway's mode field.
+    /// The gateway routes by mode to per-mode priority queue + timeout config:
+    ///   quick   (priority 10, 5s timeout, max_inflight 1) — refine: short single-line cleanup
+    ///   default (priority 5, 30s timeout)                — claudeCode: medium with reasoning
+    ///   batch   (priority 1, 60s timeout)                — structure: long multi-section markdown
+    /// Backward compatible: the gateway is OpenAI-compat so this field is
+    /// silently ignored by upstream Rapid-MLX / LM Studio / ollama when the
+    /// user hasn't switched their llmAPIBaseURL to the gateway yet.
+    static func gatewayMode(for refineMode: RefineMode) -> String {
+        switch refineMode {
+        case .refine: return "quick"
+        case .claudeCode: return "default"
+        case .structure: return "batch"
+        }
     }
 
     // MARK: - System prompt resolution

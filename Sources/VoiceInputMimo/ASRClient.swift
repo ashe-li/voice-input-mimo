@@ -75,6 +75,7 @@ final class ASRClient {
         // form fields
         appendField("language", language)
         appendField("output_locale", outputLocale)
+        appendField("mode", "quick")
 
         // close
         body.append("--\(boundary)--\(crlf)".data(using: .utf8)!)

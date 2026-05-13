@@ -1,7 +1,8 @@
 # Plan: Structure Mode (複合情境) with Template Router
 
-**Status:** Draft, awaiting confirmation
+**Status:** ✅ SHIPPED (verified 2026-05-14 — `RefineMode.structure` case + `Prompts/StructureRouter.swift` + 5 templates in `BuiltinPromptCatalog` + `StructureRouterTests.swift` all in main; no retro KB report written)
 **Created:** 2026-05-11
+**Revised:** 2026-05-14 (reality-check found plan was stale after Sprint 1.1 shipped out-of-order)
 **Owner:** ashe-li
 
 ## Goal

@@ -1,8 +1,9 @@
 ---
 title: ZeroType Roadmap — Cross-Session Handoff Prompt
 slug: zerotype-handoff
-status: ready-to-paste
+status: ready-to-paste (revised 2026-05-14 — most phases now shipped; only Sprint 3.2 truly unstarted, Sprint 3.1 HITL-blocked)
 created: 2026-05-14
+revised: 2026-05-14
 purpose: 直接貼到新 Claude Code session 或 /compact 後使用，自包含恢復 context
 ---
 
@@ -55,18 +56,37 @@ KB 中可參考：
 - 緊急 rollback：每 phase ship 前建 git tag v-phase-X.Y-pre-ship + 備份 plist + 備份 app bundle
 - 既有 mode 行為**嚴格不變**：新功能不可污染 raw / refine / claudeCode / structure 任一行為
 
-## 目前狀態：所有 plan 已完成，尚未開工
+## 目前狀態（2026-05-14 revised — DO NOT trust earlier "all unstarted" wording）
 
-剛完成的是規劃（roadmap rev3 + execution checklist）。實作從 Pre-flight 5 項開始。
+| Sprint / Phase | 狀態 |
+|---|---|
+| Sprint 1.1 structure-mode-template-router | ✅ shipped（`RefineMode.structure` + `Prompts/StructureRouter.swift` + tests）|
+| Sprint 1.2 prompt-profile-skill-system | ✅ shipped（`Prompts/` 9 files + 8 test files）|
+| Sprint 1.3 asr-engine-memory-mgmt | ✅ shipped（`engine/` 5 files 1139 lines, production on port 8766）+ harness retro report |
+| Sprint 2.0 WorkspacePane | ✅ shipped（PR #14 merged → v1.1.0 tagged）|
+| Sprint 2.1 Glossary | ✅ shipped（PR #14）|
+| Sprint 2.2 Trace + Park mode | ✅ shipped（PR #14）|
+| Sprint 2.3 Mode 4 Context-Aware | ✅ shipped — PR #15 open, awaiting user e2e（Mail / Cursor / Notion / unknown bundle 4 paths）|
+| Sprint 3.1 local-meeting-captions | 🟡 13/16 shipped in **獨立 repo** `~/Documents/local-meeting-captions/` — 剩 3 步 HITL-blocked（user 跑 14 cells × Chrome/Zoom/Meet/Twitch drift）|
+| Sprint 3.2 REQ-NEW-D Workflow Chaining | ⏳ **唯一真正未開工**的 phase |
 
-## 我接下來要做的事（請等我指定）
+## 我接下來要做的事
 
-請先確認你已讀完上述 2 份必讀文件，回覆我「context 已建立 + 確認 Sprint X / Phase X.Y 是下一步」。我會回覆要從哪個 phase 開工（可能是 Sprint 1 Phase 1.1，也可能跳 Sprint 2 嘗鮮路線從 Phase 2.0 開始）。
+請先確認讀完上述 2 份必讀文件、**並對 grep codebase 驗證 plan checklist 是否同步**（同日已踩 6 次 plan-vs-codebase drift — 參考 `~/Documents/knowledge-base/wiki/patterns/plan-checklist-todo-not-codebase-truth-grep-first.md` recipe v2）。
+
+若我指定的 phase 是「我以為未做但 grep 發現已 shipped」→ 不要重做、不要重寫，先回報 reality-check 結果讓我選下一步。
+
+**Reality-check 順序**（v2 recipe）：
+
+1. grep symbol / 檔案
+2. grep `harness/` / `reports/` / `docs/` 看 retrospective 是否已 shipped
+3. 檢查 sibling repos：`ls ~/Documents/<repo>-* ~/Documents/*<feature>*`
+4. 檢查 handoff / context-priming docs 是否 stale（即本檔）
 
 開工前**不要**先動 code，先：
 1. 確認 main branch 乾淨
-2. 跑 Pre-flight checklist 5 項
-3. 建對應 worktree
+2. Reality-check 4 步
+3. 建對應 worktree（依 `~/Documents/agent-skills/rules/worktree-prompt.md`）
 
 之後依 execution-checklist 對應 phase 的勾選項逐項推進。
 ```

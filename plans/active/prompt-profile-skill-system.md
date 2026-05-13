@@ -1,11 +1,23 @@
 ---
 title: Prompt Profile + Skill 客製化系統 — Implementation Plan
 slug: prompt-profile-skill-system
-status: draft
+status: ✅ SHIPPED (verified 2026-05-14 — entire Prompts/ directory exists with 9 source files + 8 test files in main; no retro KB report written)
 created: 2026-05-10
-worktree: TBD（會在實作前再詢問）
-branch: feat/prompt-profile-skill-system
+revised: 2026-05-14
+worktree: completed (already merged to main; worktree cleaned)
+branch: feat/prompt-profile-skill-system (merged)
 parent_repo: ~/Documents/voice-input-mimo
+shipped_files:
+  - Sources/VoiceInputMimo/Prompts/PromptProfile.swift
+  - Sources/VoiceInputMimo/Prompts/PromptStore.swift
+  - Sources/VoiceInputMimo/Prompts/PromptStoreProviding.swift
+  - Sources/VoiceInputMimo/Prompts/PromptStoreViewModel.swift
+  - Sources/VoiceInputMimo/Prompts/PromptComposer.swift
+  - Sources/VoiceInputMimo/Prompts/PromptIO.swift
+  - Sources/VoiceInputMimo/Prompts/PromptMigration.swift
+  - Sources/VoiceInputMimo/Prompts/BuiltinPromptCatalog.swift
+  - Sources/VoiceInputMimo/Prompts/StructureRouter.swift
+  - Sources/VoiceInputMimo/Settings/Prompts/ProfileSidebar.swift
 related_kb:
   - knowledge-base/reports/2026-05-10-voice-input-mimo-refine-prompt-v1-and-overlay-mode-bug.md
   - knowledge-base/wiki/patterns/llm-refine-prompt-conservative-clause-blocks-filler-cleanup.md

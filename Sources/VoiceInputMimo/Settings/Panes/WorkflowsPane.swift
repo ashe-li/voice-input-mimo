@@ -212,7 +212,7 @@ struct WorkflowEditor: View {
                 .pickerStyle(.segmented)
             }
 
-            Section("Hotkey (optional)") {
+            Section {
                 TextField("e.g. cmd+shift+1", text: Binding(
                     get: { workflow.hotkey ?? "" },
                     set: { v in
@@ -222,6 +222,12 @@ struct WorkflowEditor: View {
                         onChange(c)
                     }
                 ))
+            } header: {
+                Text("Hotkey (optional)")
+            } footer: {
+                Text("v1: value is stored but not globally bound yet — use the Run button above or Mode 4 dispatch (post PR #15) to invoke the chain. Free-form global hotkey binding is a follow-up.")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
             }
         }
         .formStyle(.grouped)

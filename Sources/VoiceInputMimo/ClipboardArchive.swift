@@ -83,23 +83,30 @@ final class ClipboardArchive {
 
     /// Save a pre-paste snapshot. Skips if disabled or text empty/nil.
     /// `traceId` lets the caller cross-reference back to the originating
-    /// `TraceEntry`; nil for non-pipeline saves.
-    func save(_ text: String?, traceId: String? = nil) {
-        guard let text else { return }
-        saveContent(text, kind: .clipboard, traceId: traceId)
+    /// `TraceEntry`; nil for non-pipeline saves. Returns the ISO8601
+    /// timestamp the entry was stored under, or nil if the save was a
+    /// no-op (disabled or empty text), so the trace pipeline can store
+    /// it back in `TraceEntry.clipboardTimestamp`.
+    @discardableResult
+    func save(_ text: String?, traceId: String? = nil) -> String? {
+        guard let text else { return nil }
+        return saveContent(text, kind: .clipboard, traceId: traceId)
     }
 
     /// Save the voice-input session immediately, instead of waiting for the next
     /// paste to capture the previous clipboard. This preserves both ASR source
-    /// text and final output for each session.
-    func saveSession(zh: String, english: String, traceId: String? = nil) {
+    /// text and final output for each session. Returns the stored timestamp;
+    /// see `save(_:traceId:)` for rationale.
+    @discardableResult
+    func saveSession(zh: String, english: String, traceId: String? = nil) -> String? {
         let content = Self.formatSessionContent(zh: zh, english: english)
-        saveContent(content, kind: .session, traceId: traceId)
+        return saveContent(content, kind: .session, traceId: traceId)
     }
 
-    private func saveContent(_ text: String, kind: EntryKind, traceId: String? = nil) {
+    @discardableResult
+    private func saveContent(_ text: String, kind: EntryKind, traceId: String? = nil) -> String? {
         let cleaned = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard isEnabled, !cleaned.isEmpty else { return }
+        guard isEnabled, !cleaned.isEmpty else { return nil }
 
         let stamp = ISO8601DateFormatter().string(from: Date())
         let entry = Self.serialize(
@@ -110,6 +117,7 @@ final class ClipboardArchive {
         let combined = entry + existing
         let trimmed = Self.truncate(combined, to: Self.maxBytes)
         try? trimmed.write(to: archiveURL, atomically: true, encoding: .utf8)
+        return stamp
     }
 
     // MARK: - Read

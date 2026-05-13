@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "metric": "latency",
+  "baseline_version": {
+    "git_sha": "9e4ce7a133d480c6f5feb706c75cabdd95bcff81",
+    "git_branch": "main",
+    "git_status_clean": true,
+    "git_status_raw": null,
+    "captured_at": "2026-05-13T23:09:01.188127+00:00"
+  },
+  "host": {
+    "platform": "macOS-26.3-arm64-arm-64bit",
+    "machine": "arm64",
+    "python": "3.12.13"
+  },
+  "config": {
+    "server_url": "http://127.0.0.1:8765",
+    "audio": "fixtures/audio/zh-tw-short-01.wav",
+    "language": "zh",
+    "runs": 5
+  },
+  "summary": {
+    "cold_ms": 7991.805625002598,
+    "warm_ms": 842.8357500233687,
+    "steady_median_ms": 850.421582988929,
+    "steady_p95_ms": 1005.367384798592,
+    "n_success": 5,
+    "n_total": 5
+  },
+  "all_timings_ms": [
+    {
+      "status": 200,
+      "ms": 7991.805625002598,
+      "ok": true,
+      "i": 0
+    },
+    {
+      "status": 200,
+      "ms": 842.8357500233687,
+      "ok": true,
+      "i": 1
+    },
+    {
+      "status": 200,
+      "ms": 936.5025839942973,
+      "ok": true,
+      "i": 2
+    },
+    {
+      "status": 200,
+      "ms": 809.8842080216855,
+      "ok": true,
+      "i": 3
+    },
+    {
+      "status": 200,
+      "ms": 850.421582988929,
+      "ok": true,
+      "i": 4
+    }
+  ]
+}

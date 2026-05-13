@@ -10,6 +10,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
     case asrServer
     case prompts
     case glossary
+    case workflows
     case history
     case about
 
@@ -23,6 +24,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .asrServer: return "ASR Server"
         case .prompts: return "Prompts"
         case .glossary: return "Glossary"
+        case .workflows: return "Workflows"
         case .history: return "History"
         case .about: return "About"
         }
@@ -36,6 +38,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .asrServer: return "server.rack"
         case .prompts: return "text.append"
         case .glossary: return "character.book.closed"
+        case .workflows: return "arrow.triangle.branch"
         case .history: return "clock.arrow.circlepath"
         case .about: return "info.circle"
         }

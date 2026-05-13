@@ -148,6 +148,7 @@ final class PromptStore: PromptStoreProviding, @unchecked Sendable {
         case .refine: id = selection.refineProfileID
         case .claudeCode: id = selection.claudeCodeProfileID
         case .structure: id = selection.structureProfileID
+        case .contextAware: return nil  // contextAware has no own active profile — delegate decides
         }
         return try loadProfile(id: id, mode: mode)
     }

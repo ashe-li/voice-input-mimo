@@ -7,6 +7,7 @@ enum RefineMode: String, Codable, Sendable {
     case refine        // Original: cleanup-only, keep language
     case claudeCode    // Cleanup + Chinese→English + append zh-TW suffix
     case structure     // Auto-classify input → route to template profile (meeting/task/requirement/letter/article)
+    case contextAware  // Dispatch by frontmost-app bundle ID → delegate to refine/claudeCode/structure
 }
 
 final class LLMRefiner {
@@ -37,23 +38,38 @@ final class LLMRefiner {
         set {
             UserDefaults.standard.set(newValue, forKey: "claudeCodeModeEnabled")
             if newValue {
-                // Mutually exclusive with structure mode — clear the other flag
-                // so compound state can't end up in (claudeCode=true, structure=true).
                 UserDefaults.standard.set(false, forKey: "structureModeEnabled")
+                UserDefaults.standard.set(false, forKey: "contextAwareModeEnabled")
             }
         }
     }
 
     /// When true, refine() routes through `.structure` mode and uses
     /// StructureRouter to pick a template profile based on input keywords.
-    /// Mutually exclusive with `claudeCodeModeEnabled` — turning either on
-    /// flips the other off.
+    /// Mutually exclusive with the other LLM-driven modes — turning this on
+    /// flips claudeCode and contextAware off.
     var structureModeEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: "structureModeEnabled") }
         set {
             UserDefaults.standard.set(newValue, forKey: "structureModeEnabled")
             if newValue {
                 UserDefaults.standard.set(false, forKey: "claudeCodeModeEnabled")
+                UserDefaults.standard.set(false, forKey: "contextAwareModeEnabled")
+            }
+        }
+    }
+
+    /// When true, refine() captures the frontmost app context (bundle ID via
+    /// `NSWorkspace.frontmostApplication`) and delegates to one of the other
+    /// modes (refine / claudeCode / structure) per `ToneMapping`. Mutually
+    /// exclusive with the explicit-mode flags above.
+    var contextAwareModeEnabled: Bool {
+        get { UserDefaults.standard.bool(forKey: "contextAwareModeEnabled") }
+        set {
+            UserDefaults.standard.set(newValue, forKey: "contextAwareModeEnabled")
+            if newValue {
+                UserDefaults.standard.set(false, forKey: "claudeCodeModeEnabled")
+                UserDefaults.standard.set(false, forKey: "structureModeEnabled")
             }
         }
     }
@@ -119,10 +135,18 @@ final class LLMRefiner {
             return
         }
 
-        let resolvedMode = mode ?? Self.activeModeFromToggles(
+        let rawMode = mode ?? Self.activeModeFromToggles(
             claudeCodeEnabled: claudeCodeModeEnabled,
-            structureEnabled: structureModeEnabled
+            structureEnabled: structureModeEnabled,
+            contextAwareEnabled: contextAwareModeEnabled
         )
+        // contextAware delegates to one of the explicit modes based on the
+        // frontmost-app bundle ID. The delegate decision is captured here so
+        // downstream branches (.structure router path, profile lookup, glossary
+        // injection) treat the resolved mode uniformly.
+        let resolvedMode: RefineMode = (rawMode == .contextAware)
+            ? ToneMapping.resolve(context: ContextCapture.capture())
+            : rawMode
         // For .structure mode the active profile is picked by the router based
         // on input content, not by ActiveSelection. For .refine / .claudeCode
         // it stays the user's chosen active profile.
@@ -249,7 +273,8 @@ final class LLMRefiner {
     /// Precedence (highest first): structure > claudeCode > refine. Both
     /// setters enforce mutual exclusion, but precedence here protects
     /// against any external race that leaves both flags on.
-    static func activeModeFromToggles(claudeCodeEnabled: Bool, structureEnabled: Bool) -> RefineMode {
+    static func activeModeFromToggles(claudeCodeEnabled: Bool, structureEnabled: Bool, contextAwareEnabled: Bool = false) -> RefineMode {
+        if contextAwareEnabled { return .contextAware }
         if structureEnabled { return .structure }
         if claudeCodeEnabled { return .claudeCode }
         return .refine
@@ -297,6 +322,14 @@ final class LLMRefiner {
                 profile: BuiltinPromptCatalog.structureFallbackProfile,
                 skills: skills.isEmpty ? BuiltinPromptCatalog.skills : skills
             )
+        case .contextAware:
+            // contextAware is dispatched via ToneMapping in refine() before
+            // reaching here, so this branch is purely defensive. Fall back to
+            // refine's default if any caller invokes this with .contextAware.
+            if let custom = userDefaults.string(forKey: "refineSystemPrompt"), !custom.isEmpty {
+                return custom
+            }
+            return Self.defaultRefinePrompt
         }
     }
 

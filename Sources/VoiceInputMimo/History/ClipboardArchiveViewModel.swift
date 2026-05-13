@@ -43,6 +43,23 @@ struct HistoryEntryViewItem: Identifiable, Equatable, Sendable {
     let timestamp: String
     let kind: ClipboardArchive.EntryKind
     let content: String
+    /// Cross-reference to a `TraceEntry.id`. Set when this clipboard entry
+    /// was produced by a recording session that wrote to TraceStore.
+    let traceId: String?
+
+    init(
+        index: Int,
+        timestamp: String,
+        kind: ClipboardArchive.EntryKind,
+        content: String,
+        traceId: String? = nil
+    ) {
+        self.index = index
+        self.timestamp = timestamp
+        self.kind = kind
+        self.content = content
+        self.traceId = traceId
+    }
 
     var id: String { "\(timestamp)|\(kind.rawValue)|\(index)" }
 
@@ -119,7 +136,13 @@ final class ClipboardArchiveViewModel {
     func reload() {
         let raw = archive.entries()
         entries = raw.enumerated().map { idx, e in
-            HistoryEntryViewItem(index: idx, timestamp: e.timestamp, kind: e.kind, content: e.content)
+            HistoryEntryViewItem(
+                index: idx,
+                timestamp: e.timestamp,
+                kind: e.kind,
+                content: e.content,
+                traceId: e.traceId
+            )
         }
         entryByID = Dictionary(uniqueKeysWithValues: entries.map { ($0.id, $0) })
         recomputeAll()

@@ -8,6 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let audioRecorder = AudioRecorder()
     private let textInjector = TextInjector()
     private lazy var overlayPanel = OverlayPanel()
+    private let tracer = RecordingTracer()
 
     private var isEnabled = true
     private var isRecording = false
@@ -222,6 +223,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ASRClient.shared.cancel()
         isRecording = true
         currentZH = ""
+        tracer.begin()
 
         updateStatusIcon(recording: true)
         overlayPanel.transition(to: .recording(elapsed: 0))
@@ -240,8 +242,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let wavURL = audioRecorder.stopRecording()
         guard let wavURL else {
             overlayPanel.transition(to: .error("No audio captured"))
+            tracer.recordError("No audio captured")
+            tracer.finalize()
             return
         }
+        tracer.recordAudio(path: wavURL.path)
 
         // Stage 1: ASR (MiMo via :8765)
         overlayPanel.transition(to: .transcribing(elapsed: 0))
@@ -255,6 +260,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case .failure(let error):
                 NSLog("[AppDelegate] ASR failed: %@", error.localizedDescription)
                 self.overlayPanel.transition(to: .error("ASR: \(error.localizedDescription)"))
+                self.tracer.recordError("ASR: \(error.localizedDescription)")
+                self.tracer.finalize()
             }
         }
     }
@@ -263,9 +270,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             overlayPanel.transition(to: .error("No speech detected"))
+            tracer.recordError("No speech detected")
+            tracer.finalize()
             return
         }
         currentZH = trimmed
+        tracer.recordASR(trimmed)
 
         let refiner = LLMRefiner.shared
         if refiner.isEnabled && refiner.isConfigured {
@@ -320,10 +330,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 switch result {
                 case .success(let refined):
                     let final = refined.isEmpty ? trimmed : refined
+                    self.tracer.recordLLM(final, mode: activeMode.rawValue)
                     self.completeWithEnglish(final)
                 case .failure(let error):
                     NSLog("[AppDelegate] LLM failed: %@", error.localizedDescription)
                     self.overlayPanel.transition(to: .error("LLM: \(error.localizedDescription)"))
+                    // Finalize the trace now with the ASR fallback as final.
+                    // The injectImmediately closure below fires 1.2s later
+                    // and intentionally does not save to ClipboardArchive
+                    // (preserving prior behaviour); if the user records
+                    // again before then, the next `begin()` would discard
+                    // this trace, so persist eagerly.
+                    self.tracer.recordError("LLM: \(error.localizedDescription)")
+                    self.tracer.recordFinal(trimmed)
+                    self.tracer.finalize()
                     DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
                         self?.injectImmediately(trimmed)
                     }
@@ -350,7 +370,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         let translating = activeMode == .claudeCode
         overlayPanel.transition(to: .bothReady(zh: currentZH, en: english, translating: translating))
-        ClipboardArchive.shared.saveSession(zh: currentZH, english: english)
+        let stamp = ClipboardArchive.shared.saveSession(
+            zh: currentZH,
+            english: english,
+            traceId: tracer.currentTrace?.id
+        )
+        if let stamp { tracer.recordClipboard(timestamp: stamp) }
+        tracer.recordFinal(english)
+        tracer.finalize()
         injectImmediately(english)
     }
 
@@ -361,7 +388,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // translating=false: ASR-only path, overlay renders single line (no
         // duplicate ZH/EN rows).
         overlayPanel.transition(to: .bothReady(zh: text, en: text, translating: false))
-        ClipboardArchive.shared.saveSession(zh: text, english: text)
+        let stamp = ClipboardArchive.shared.saveSession(
+            zh: text,
+            english: text,
+            traceId: tracer.currentTrace?.id
+        )
+        if let stamp { tracer.recordClipboard(timestamp: stamp) }
+        tracer.recordFinal(text)
+        tracer.finalize()
         injectImmediately(text)
     }
 

@@ -127,25 +127,34 @@ final class LLMRefiner {
         // on input content, not by ActiveSelection. For .refine / .claudeCode
         // it stays the user's chosen active profile.
         let activeProfile: PromptProfile?
-        let systemPrompt: String
+        let basePrompt: String
         if resolvedMode == .structure {
             let routedID = StructureRouter.route(input: text)
             let routed = (try? PromptStore.shared.loadProfile(id: routedID, mode: .structure)) ?? nil
             activeProfile = routed
             if let routed {
                 let skills = (try? PromptStore.shared.listSkills()) ?? []
-                systemPrompt = PromptComposer.render(profile: routed, skills: skills)
+                basePrompt = PromptComposer.render(profile: routed, skills: skills)
             } else {
-                systemPrompt = Self.defaultRefinePrompt
+                basePrompt = Self.defaultRefinePrompt
             }
         } else {
             activeProfile = (try? PromptStore.shared.activeProfile(for: resolvedMode)) ?? nil
-            systemPrompt = Self.resolveSystemPrompt(
+            basePrompt = Self.resolveSystemPrompt(
                 for: resolvedMode,
                 store: PromptStore.shared,
                 userDefaults: .standard
             )
         }
+        // Glossary injection — append user-defined proper nouns so the LLM
+        // preserves canonical spellings (vocus, PDT-9624, etc.). Empty
+        // glossary returns the base prompt unchanged; failures (store IO)
+        // also degrade to base prompt rather than aborting the request.
+        let glossaryEntries = (try? GlossaryStore.shared.loadAll()) ?? []
+        let systemPrompt = GlossaryInjector.inject(
+            systemPrompt: basePrompt,
+            entries: glossaryEntries
+        )
 
         guard let url = URL(string: "\(normalizedBaseURL())/chat/completions") else {
             completion(.failure(RefinerError.invalidURL))

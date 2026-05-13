@@ -12,6 +12,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var isEnabled = true
     private var isRecording = false
+    /// Set during a Ctrl+Option+R recording — gates the post-ASR
+    /// pipeline to skip LLM + paste and route to a park trace instead.
+    private var isParkMode = false
 
     private var enableMenuItem: NSMenuItem!
     private var outputModeMenuItem: NSMenuItem!
@@ -130,6 +133,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         keyMonitor.onFnUp = { [weak self] in self?.fnUp() }
         keyMonitor.onCycleNext = { [weak self] in self?.cycleOutputMode(direction: 1) }
         keyMonitor.onCyclePrev = { [weak self] in self?.cycleOutputMode(direction: -1) }
+        keyMonitor.onParkDown = { [weak self] in self?.parkDown() }
+        keyMonitor.onParkUp = { [weak self] in self?.parkUp() }
         NotificationCenter.default.addObserver(
             forName: .shortcutBindingDidChange, object: nil, queue: .main
         ) { [weak self] _ in self?.keyMonitor.invalidateShortcutCache() }
@@ -244,6 +249,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             overlayPanel.transition(to: .error("No audio captured"))
             tracer.recordError("No audio captured")
             tracer.finalize()
+            isParkMode = false
             return
         }
         tracer.recordAudio(path: wavURL.path)
@@ -262,6 +268,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 self.overlayPanel.transition(to: .error("ASR: \(error.localizedDescription)"))
                 self.tracer.recordError("ASR: \(error.localizedDescription)")
                 self.tracer.finalize()
+                self.isParkMode = false
             }
         }
     }
@@ -272,10 +279,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             overlayPanel.transition(to: .error("No speech detected"))
             tracer.recordError("No speech detected")
             tracer.finalize()
+            isParkMode = false
             return
         }
         currentZH = trimmed
         tracer.recordASR(trimmed)
+
+        // Park mode short-circuit: archive + trace the ASR transcript,
+        // but no LLM refine and no paste injection. The user grabs the
+        // captured text later from clipboard history or trace UI.
+        if isParkMode {
+            completePark(trimmed)
+            return
+        }
 
         let refiner = LLMRefiner.shared
         if refiner.isEnabled && refiner.isConfigured {
@@ -402,6 +418,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func injectImmediately(_ text: String) {
         textInjector.inject(text)
         NSSound(named: .init("Pop"))?.play()
+    }
+
+    /// Park-mode completion: ASR-only transcript is archived to clipboard
+    /// history (kind=session) and the trace is finalised with mode=park.
+    /// No LLM, no paste — the user retrieves it later from history.
+    private func completePark(_ text: String) {
+        overlayPanel.transition(to: .bothReady(zh: text, en: text, translating: false))
+        let stamp = ClipboardArchive.shared.saveSession(
+            zh: text,
+            english: "",
+            traceId: tracer.currentTrace?.id
+        )
+        if let stamp { tracer.recordClipboard(timestamp: stamp) }
+        tracer.recordPark()
+        tracer.finalize()
+        NSSound(named: .init("Pop"))?.play()
+        isParkMode = false
+    }
+
+    // MARK: - Park-mode hotkey
+
+    private func parkDown() {
+        guard isEnabled, !isRecording else { return }
+        isParkMode = true
+        // Reuse fnDown's setup path so the audio + tracer + overlay
+        // boilerplate stays in one place; the divergence happens in
+        // handleTranscription where isParkMode is checked.
+        fnDown()
+    }
+
+    private func parkUp() {
+        // Same end-side as fnUp. handleTranscription routes to
+        // completePark when isParkMode is set.
+        fnUp()
     }
 
     // MARK: - Conflict detection

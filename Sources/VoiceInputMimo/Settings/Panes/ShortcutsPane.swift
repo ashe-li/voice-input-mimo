@@ -32,6 +32,14 @@ struct ShortcutsPane: View {
             }
 
             Section {
+                Toggle("Enable Ctrl+Option+R to record without pasting",
+                       isOn: $vm.parkHotkeyEnabled)
+            } header: {
+                SectionHeading("Park mode",
+                               subtitle: "Hold to record + transcribe; archives to history without paste")
+            }
+
+            Section {
                 HStack {
                     Spacer()
                     Button("Save") { vm.save() }

@@ -42,6 +42,7 @@ struct ShortcutBinding: Equatable {
     static let primaryKey = "shortcutPrimaryPreset"
     static let secondaryKey = "shortcutSecondaryPreset"
     static let cycleHotkeyKey = "cycleHotkeyEnabled"
+    static let parkHotkeyKey = "parkHotkeyEnabled"
 
     let preset: Preset
 
@@ -75,6 +76,17 @@ struct ShortcutBinding: Equatable {
 
     static func saveCycleHotkeyEnabled(_ enabled: Bool) {
         UserDefaults.standard.set(enabled, forKey: cycleHotkeyKey)
+    }
+
+    /// Ctrl+Option+R park-mode hotkey. Holds to record → ASR → archive +
+    /// trace without pasting (for "speak it now, do it later" capture).
+    /// Default true.
+    static func loadParkHotkeyEnabled() -> Bool {
+        (UserDefaults.standard.object(forKey: parkHotkeyKey) as? Bool) ?? true
+    }
+
+    static func saveParkHotkeyEnabled(_ enabled: Bool) {
+        UserDefaults.standard.set(enabled, forKey: parkHotkeyKey)
     }
 
     func matchesKeyDown(event: CGEvent) -> Bool {

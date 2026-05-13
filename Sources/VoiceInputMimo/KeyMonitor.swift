@@ -8,17 +8,25 @@ final class KeyMonitor {
     var onCycleNext: (() -> Void)?
     /// Fired when the user presses Ctrl+Option+←. Cycles output mode backward.
     var onCyclePrev: (() -> Void)?
+    /// Fired when the user begins pressing Ctrl+Option+R. Hold-to-record
+    /// "park" mode: ASR + archive + trace, but no paste / no LLM.
+    var onParkDown: (() -> Void)?
+    /// Fired when the user releases Ctrl+Option+R (any modifiers).
+    var onParkUp: (() -> Void)?
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
     private var fnPressed = false
     private var activeKeyCode: Int64?
+    private var parkActive = false
     private var cachedShortcuts: [ShortcutBinding]?
     private var cachedCycleEnabled: Bool?
+    private var cachedParkEnabled: Bool?
 
     // Arrow keycodes on macOS.
     private static let leftArrowKeyCode: Int64 = 123
     private static let rightArrowKeyCode: Int64 = 124
+    private static let rKeyCode: Int64 = 15
 
     /// Drop the cached shortcut bindings. Call from Settings after the user
     /// changes a shortcut so the EventTap thread picks up the new binding on
@@ -26,6 +34,7 @@ final class KeyMonitor {
     func invalidateShortcutCache() {
         cachedShortcuts = nil
         cachedCycleEnabled = nil
+        cachedParkEnabled = nil
     }
 
     /// Start monitoring. Returns false if accessibility permission is missing.
@@ -76,6 +85,7 @@ final class KeyMonitor {
         eventTap = nil
         fnPressed = false
         activeKeyCode = nil
+        parkActive = false
     }
 
     // MARK: - Private
@@ -137,6 +147,33 @@ final class KeyMonitor {
             }
             if kc == Self.rightArrowKeyCode {
                 DispatchQueue.main.async { [weak self] in self?.onCycleNext?() }
+                return nil
+            }
+        }
+
+        // Ctrl+Option+R = park-mode hold-to-record. Hand off to the
+        // dedicated callbacks; AppDelegate routes through the park
+        // pipeline (no LLM, no paste). Gated by `parkHotkeyEnabled`.
+        //
+        // keyUp matches only on R-keycode without re-checking modifiers,
+        // because the user may release Ctrl or Option first — relying on
+        // flag presence at release time would strand `parkActive`.
+        let parkEnabled = cachedParkEnabled ?? {
+            let v = ShortcutBinding.loadParkHotkeyEnabled()
+            cachedParkEnabled = v
+            return v
+        }()
+        if parkEnabled, activeKeyCode == nil {
+            let kc = event.getIntegerValueField(.keyboardEventKeycode)
+            if type == .keyDown, !parkActive, kc == Self.rKeyCode,
+               event.flags.containsAll([.maskControl, .maskAlternate]) {
+                parkActive = true
+                DispatchQueue.main.async { [weak self] in self?.onParkDown?() }
+                return nil
+            }
+            if type == .keyUp, parkActive, kc == Self.rKeyCode {
+                parkActive = false
+                DispatchQueue.main.async { [weak self] in self?.onParkUp?() }
                 return nil
             }
         }

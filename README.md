@@ -21,7 +21,7 @@
 | Service | 預設 endpoint | 你要先把它跑起來 |
 |---|---|---|
 | ASR engine（這個 repo 內附） | `http://127.0.0.1:8766` | `make server-start` 或 app 第一次啟動會自動 spawn |
-| LLM backend（任意 OpenAI-compatible） | `http://127.0.0.1:8082/v1` | 推薦 [Rapid-MLX](https://github.com/junkboy0315/rapid-mlx)；LM Studio / ollama / vLLM 也行 |
+| LLM backend（任意 OpenAI-compatible） | `http://127.0.0.1:8082/v1` | 推薦 [Rapid-MLX](https://github.com/junkboy0315/rapid-mlx)；ollama / vLLM 也行 |
 
 第一次跑 ASR engine 會下載 ~4.5 GB 的 INT4 MLX model 到 `~/.cache/mimo-asr/`（之後 cache 住）。LLM model 自己挑，建議 Qwen3-8B 或同等級以上。
 

@@ -10,7 +10,7 @@ Usage:
         --runs 1
 
 Default endpoint targets Rapid-MLX (the project's primary LLM backend); any
-OpenAI-compatible /v1/chat/completions service works (LM Studio, ollama, etc.).
+OpenAI-compatible /v1/chat/completions service works (ollama, vLLM, etc.).
 
 Inputs are baked from the user's clipboard-archive.txt at the times noted —
 real long-form ASR transcripts of mixed Chinese/English voice dictation that

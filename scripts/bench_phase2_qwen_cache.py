@@ -5,10 +5,11 @@ Simulates: 5 chat completions to fill Qwen prefix cache, then idle 5+ min
             to L1 → expire → POST /v1/cache/clear → cache_mb drops to ~0.
 
 Caveat: this bench targets the Rapid-MLX instance at port 8082 directly. If
-the user's voice-input app routes LLM refining through LM Studio (port 1234)
-instead, this bench validates engine→Rapid-MLX wiring but does NOT validate
-that real app traffic triggers the cache_clear. To validate end-to-end,
-point voice-input app's `llmAPIBaseURL` to http://127.0.0.1:8082/v1.
+the user's voice-input app routes LLM refining through a different OpenAI-
+compatible provider (ollama / vLLM / etc.), this bench validates engine→
+Rapid-MLX wiring but does NOT validate that real app traffic triggers the
+cache_clear. To validate end-to-end, point voice-input app's `llmAPIBaseURL`
+to http://127.0.0.1:8082/v1.
 
 Run from repo root:
     PYTHONPATH=. /Users/shiun/Documents/voice-input-mimo/server/.venv/bin/python \\

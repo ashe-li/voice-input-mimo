@@ -191,7 +191,7 @@ MVP 範圍鎖定：mic-only capture、external Qwen sidecar、Rapid-MLX `POST /v
 - [ ] Step 13: Rapid-MLX/OpenAI-compatible LLM client
   - Agent: `security-reviewer`
   - Input: Rapid-MLX localhost base URL、model name、optional API key
-  - Output: MVP 僅支援 `POST /v1/chat/completions` contract、localhost-first validation、smoke test；Ollama/LM Studio/vLLM adapter 延後
+  - Output: MVP 僅支援 `POST /v1/chat/completions` contract、localhost-first validation、smoke test；Ollama/vLLM adapter 延後
   - Files: `Core/LLM/OpenAICompatibleLLMProvider.swift`, `Core/LLM/RapidMLXClient.swift`
 
 - [ ] Step 14: translation/refinement queue
@@ -384,7 +384,7 @@ MVP 範圍鎖定：mic-only capture、external Qwen sidecar、Rapid-MLX `POST /v
 
 相容性：既有 `voice-input-mimo` 的 `LLMRefiner` pattern 可作參考，但 meeting app 需要 queueing 與 per-segment persistence。
 
-可擴展性：先把 Rapid-MLX contract 測穩；Ollama、LM Studio、vLLM 之後用 provider adapter 各自處理差異。
+可擴展性：先把 Rapid-MLX contract 測穩；Ollama、vLLM 之後用 provider adapter 各自處理差異。
 
 效能與安全：LLM queue 有界且可選；API keys 與 transcripts 不應進 log。
 

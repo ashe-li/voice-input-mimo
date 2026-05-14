@@ -317,8 +317,9 @@ final class LLMRefiner {
     ///   default (priority 5, 30s timeout)                — claudeCode: medium with reasoning
     ///   batch   (priority 1, 60s timeout)                — structure: long multi-section markdown
     /// Backward compatible: the gateway is OpenAI-compat so this field is
-    /// silently ignored by upstream Rapid-MLX / LM Studio / ollama when the
-    /// user hasn't switched their llmAPIBaseURL to the gateway yet.
+    /// silently ignored by upstream Rapid-MLX / ollama when the user hasn't
+    /// switched their llmAPIBaseURL to the gateway yet.
+
     /// Outcome of resolving `rawMode` + `ToneDelegate` into a concrete
     /// dispatch action. Extracted so unit tests can exercise the orchestration
     /// without going through singletons (URLSession / WorkflowStore / etc.).
@@ -424,7 +425,7 @@ final class LLMRefiner {
     }
 
     /// Probe an OpenAI-compatible /v1/models endpoint. Used by Settings to detect
-    /// the local LLM backend (Rapid-MLX by default; LM Studio / ollama also work).
+    /// the local LLM backend (Rapid-MLX by default; ollama also works).
     func probeModels(completion: @escaping (Result<[String], Error>) -> Void) {
         guard let url = URL(string: "\(normalizedBaseURL())/models") else {
             completion(.failure(RefinerError.invalidURL))

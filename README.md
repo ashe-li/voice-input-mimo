@@ -16,14 +16,17 @@
 
 ## ⚠️ 你需要準備的東西
 
-這個 app 只是**前端**（錄音 + 貼上），它打兩個本機 service：
+這個 app 只是**前端**（錄音 + 貼上），它打**單一統一入口**：[local-llm-backend](https://github.com/junkboy0315/local-llm-backend) gateway（OpenAI-compatible，本機 `:4000`）。gateway 後面再 fan-out 到實際的 ASR / LLM backend。
 
-| Service | 預設 endpoint | 你要先把它跑起來 |
+| Service | 預設 endpoint | 用途 |
 |---|---|---|
-| ASR engine（這個 repo 內附） | `http://127.0.0.1:8766` | `make server-start` 或 app 第一次啟動會自動 spawn |
-| LLM backend（任意 OpenAI-compatible） | `http://127.0.0.1:8082/v1` | 推薦 [Rapid-MLX](https://github.com/junkboy0315/rapid-mlx)；ollama / vLLM 也行 |
+| local-llm-backend gateway | `http://127.0.0.1:4000` | ASR (`/v1/audio/transcriptions`) + LLM (`/v1/chat/completions`) 統一入口 |
+| MiMo ASR sidecar（這個 repo 內附） | `http://127.0.0.1:8766` | gateway 的 ASR upstream；`make server-start` 或 app 第一次啟動會自動 spawn |
+| LLM backend（任意 OpenAI-compatible） | gateway 設定中指定 | 推薦 [Rapid-MLX](https://github.com/junkboy0315/rapid-mlx) on `:8082`；ollama / vLLM 也行 |
 
-第一次跑 ASR engine 會下載 ~4.5 GB 的 INT4 MLX model 到 `~/.cache/mimo-asr/`（之後 cache 住）。LLM model 自己挑，建議 Qwen3-8B 或同等級以上。
+第一次跑 ASR sidecar 會下載 ~4.5 GB 的 INT4 MLX model 到 `~/.cache/mimo-asr/`（之後 cache 住）。LLM model 自己挑，建議 Qwen3-8B 或同等級以上。
+
+> **舊版資訊**：v1 預設直連 ASR sidecar `:8766` 和 LLM backend `:8082/v1`，跳過 gateway。v2+ 改走 gateway。要回到直連，覆寫 `defaults write com.shiun.VoiceInputMimo asrBaseURL "http://127.0.0.1:8766"` + `llmAPIBaseURL "http://127.0.0.1:8082/v1"`。
 
 ---
 

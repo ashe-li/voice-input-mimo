@@ -43,6 +43,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // resurrected back to .refining after .bothReady.
     private var refiningHoldWork: DispatchWorkItem?
 
+    // Latency instrumentation — set on fnUp entry, read by logLatency() to emit
+    // `[Latency] fnUp +<marker>: <ms>ms` lines at each pipeline stage. Used to
+    // RCA cutover overhead via Console.app log stream. Zero-cost when disabled
+    // (Bool flag short-circuits before any timing math).
+    private static let latencyLoggingEnabled = true
+    private var fnUpStart: CFAbsoluteTime?
+
+    private func logLatency(_ marker: String) {
+        guard Self.latencyLoggingEnabled, let start = fnUpStart else { return }
+        let ms = Int((CFAbsoluteTimeGetCurrent() - start) * 1000)
+        NSLog("[Latency] fnUp +%@: %dms", marker, ms)
+    }
+
     // MARK: - Lifecycle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -147,6 +160,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         LocalASRServer.shared.refresh { [weak self] _ in
             DispatchQueue.main.async { self?.refreshASRServerMenu() }
         }
+
+        // Warm up the ASR pipeline on launch so the user's first recording
+        // doesn't hit the MLX cold-load tax (~1s). Sends a 1s silence WAV
+        // through gateway → MiMo sidecar. Delay 3s to let LocalASRServer
+        // either adopt the running sidecar or finish spawn before we hit it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+            self?.warmUpASR()
+        }
+    }
+
+    /// One-shot ASR warmup at launch. Fire-and-forget — smokeTranscribe
+    /// internally probes adminMemory then transcribes a 1s silence WAV via
+    /// gateway → MiMo, triggering the MLX cold-load if model evicted. Failure
+    /// silently NSLogs (sidecar/gateway may be down at launch — user gets the
+    /// real error on first manual recording).
+    private func warmUpASR() {
+        ASRClient.shared.smokeTranscribe { result in
+            switch result {
+            case .success(let r):
+                NSLog(
+                    "[AppDelegate] ASR warmup done: elapsed=%dms wasCold=%@",
+                    r.elapsedMs,
+                    r.wasCold ? "YES" : "NO"
+                )
+            case .failure(let err):
+                NSLog("[AppDelegate] ASR warmup failed: %@", err.localizedDescription)
+            }
+        }
     }
 
     /// Idempotent: once `prompts/active.json` exists `bootstrapIfNeeded`
@@ -241,11 +282,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func fnUp() {
         guard isRecording else { return }
+        fnUpStart = CFAbsoluteTimeGetCurrent()
         isRecording = false
         updateStatusIcon(recording: false)
         stopPhaseTimer()
 
         let wavURL = audioRecorder.stopRecording()
+        logLatency("stopRec")
         guard let wavURL else {
             overlayPanel.transition(to: .error("No audio captured"))
             tracer.recordError("No audio captured")
@@ -255,11 +298,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         tracer.recordAudio(path: wavURL.path)
 
-        // Stage 1: ASR (MiMo via :8765)
+        // Stage 1: ASR via local-llm-backend gateway :4000 (was direct :8766 pre-cutover).
         overlayPanel.transition(to: .transcribing(elapsed: 0))
         startPhaseTimer { .transcribing(elapsed: $0) }
         ASRClient.shared.transcribe(wavURL: wavURL) { [weak self] result in
             guard let self else { return }
+            self.logLatency("ASR")
             self.stopPhaseTimer()
             switch result {
             case .success(let asrResult):
@@ -342,6 +386,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             refiner.refine(trimmed, requestId: requestId) { [weak self] result in
                 guard let self else { return }
+                self.logLatency("refine")
                 self.refiningHoldWork?.cancel()
                 self.refiningHoldWork = nil
                 self.stopPhaseTimer()
@@ -420,6 +465,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func injectImmediately(_ text: String) {
         textInjector.inject(text)
+        logLatency("inject")
         NSSound(named: .init("Pop"))?.play()
     }
 
@@ -664,6 +710,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         menu.addItem(.separator())
 
+        let exportFixturesItem = NSMenuItem(
+            title: "Export Fixtures...",
+            action: #selector(exportFixtures),
+            keyEquivalent: ""
+        )
+        exportFixturesItem.target = self
+        menu.addItem(exportFixturesItem)
+
+        menu.addItem(.separator())
+
         let quitItem = NSMenuItem(title: "Quit VoiceInputMimo", action: #selector(quit), keyEquivalent: "q")
         quitItem.target = self
         menu.addItem(quitItem)
@@ -890,6 +946,39 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func openModelMemory() {
         modelMemoryWindow.showAndStart()
+    }
+
+    @objc private func exportFixtures() {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Choose Export Destination"
+        panel.message = "Select a directory to export trace fixtures (audio + transcripts)"
+        guard panel.runModal() == .OK, let dest = panel.url else { return }
+        // Run I/O off the main queue so a large TraceStore doesn't freeze the
+        // menu / status bar.  showAlert must hop back to main since NSAlert
+        // is main-thread only.
+        DispatchQueue.global(qos: .userInitiated).async {
+            do {
+                let results = try FixtureExporter.exportAll(destination: dest)
+                let exported = results.filter { $0.skippedReason == nil }.count
+                let skipped = results.count - exported
+                DispatchQueue.main.async { [weak self] in
+                    self?.showAlert(
+                        title: "Fixture Export Done",
+                        message: "\(exported) exported, \(skipped) skipped\nDestination: \(dest.path)"
+                    )
+                }
+            } catch {
+                DispatchQueue.main.async { [weak self] in
+                    self?.showAlert(
+                        title: "Fixture Export Failed",
+                        message: error.localizedDescription
+                    )
+                }
+            }
+        }
     }
 
     // MARK: - ASR server controls

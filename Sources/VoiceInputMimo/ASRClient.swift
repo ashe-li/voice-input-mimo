@@ -7,13 +7,25 @@ struct TranscribeResult {
     let requestId: String
 }
 
-/// HTTP client for the local MiMo-V2.5-ASR FastAPI server (Whisper-compatible).
+/// HTTP client for the local-llm-backend gateway (OpenAI-compatible /v1/audio/transcriptions).
+///
+/// `baseURL` points at the gateway (default `:4000`); `sidecarBaseURL` points at the
+/// underlying MiMo sidecar (default `:8766`). User-facing transcribe goes through gateway;
+/// sidecar-specific probes (`/v1/health`, `/admin/memory`) bypass gateway because the
+/// gateway does not proxy admin endpoints.
 final class ASRClient {
     static let shared = ASRClient()
 
     var baseURL: String {
-        get { UserDefaults.standard.string(forKey: "asrBaseURL") ?? "http://127.0.0.1:8766" }
+        get { UserDefaults.standard.string(forKey: "asrBaseURL") ?? "http://127.0.0.1:4000" }
         set { UserDefaults.standard.set(newValue, forKey: "asrBaseURL") }
+    }
+
+    /// Direct URL to the MiMo sidecar (NOT through gateway). Used by health probes
+    /// and admin/memory inspection that the gateway does not proxy.
+    var sidecarBaseURL: String {
+        let port = (UserDefaults.standard.object(forKey: "asrServerPort") as? Int) ?? 8766
+        return "http://127.0.0.1:\(port)"
     }
 
     /// "auto" | "zh" | "en"
@@ -128,18 +140,21 @@ final class ASRClient {
         currentTask = nil
     }
 
-    /// GET /v1/health → JSON dict (or error).
+    /// GET sidecar `/v1/health` directly (NOT through gateway). Used by LocalASRServer
+    /// supervisor and menu status — these care about the MiMo sidecar itself, not the
+    /// gateway routing layer.
     func health(completion: @escaping (Result<[String: Any], Error>) -> Void) {
-        getJSON(path: "/v1/health", completion: completion)
+        getJSON(baseURL: sidecarBaseURL, path: "/v1/health", completion: completion)
     }
 
-    /// GET /admin/memory → JSON dict（含 asr.idle.level / current_window / time_since_use_s）.
-    /// Uses cached snapshot — Phase 2 engine returns instantly without vmmap subprocess tax.
+    /// GET sidecar `/admin/memory` directly (NOT through gateway, gateway does not proxy admin).
+    /// Returns asr.idle.level / current_window / time_since_use_s for ModelMemoryMonitor UI.
     func adminMemory(completion: @escaping (Result<[String: Any], Error>) -> Void) {
-        getJSON(path: "/admin/memory", timeout: 8, completion: completion)
+        getJSON(baseURL: sidecarBaseURL, path: "/admin/memory", timeout: 8, completion: completion)
     }
 
     private func getJSON(
+        baseURL: String,
         path: String,
         timeout: TimeInterval = 2,
         completion: @escaping (Result<[String: Any], Error>) -> Void

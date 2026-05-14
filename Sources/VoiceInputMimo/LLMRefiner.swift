@@ -19,7 +19,7 @@ final class LLMRefiner {
     }
 
     var apiBaseURL: String {
-        get { UserDefaults.standard.string(forKey: "llmAPIBaseURL") ?? "http://127.0.0.1:8082/v1" }
+        get { UserDefaults.standard.string(forKey: "llmAPIBaseURL") ?? "http://127.0.0.1:4000/v1" }
         set { UserDefaults.standard.set(newValue, forKey: "llmAPIBaseURL") }
     }
 
@@ -286,14 +286,12 @@ final class LLMRefiner {
     ///   quick   (priority 10, 5s timeout, max_inflight 1) — refine: short single-line cleanup
     ///   default (priority 5, 30s timeout)                — claudeCode: medium with reasoning
     ///   batch   (priority 1, 60s timeout)                — structure: long multi-section markdown
-    /// Backward compatible: the gateway is OpenAI-compat so this field is
-    /// silently ignored by upstream Rapid-MLX / ollama when the user hasn't
-    /// switched their llmAPIBaseURL to the gateway yet.
     static func gatewayMode(for refineMode: RefineMode) -> String {
         switch refineMode {
         case .refine: return "quick"
         case .claudeCode: return "default"
         case .structure: return "batch"
+        case .contextAware: return "default"
         }
     }
 

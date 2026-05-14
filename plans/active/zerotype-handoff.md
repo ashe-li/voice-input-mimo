@@ -66,9 +66,9 @@ KB 中可參考：
 | Sprint 2.0 WorkspacePane | ✅ shipped（PR #14 merged → v1.1.0 tagged）|
 | Sprint 2.1 Glossary | ✅ shipped（PR #14）|
 | Sprint 2.2 Trace + Park mode | ✅ shipped（PR #14）|
-| Sprint 2.3 Mode 4 Context-Aware | ✅ shipped — PR #15 open, awaiting user e2e（Mail / Cursor / Notion / unknown bundle 4 paths）|
+| Sprint 2.3 Mode 4 Context-Aware | ✅ shipped & merged — PR #15 → main `b02553e` |
 | Sprint 3.1 local-meeting-captions | 🟡 13/16 shipped in **獨立 repo** `~/Documents/local-meeting-captions/` — 剩 3 步 HITL-blocked（user 跑 14 cells × Chrome/Zoom/Meet/Twitch drift）|
-| Sprint 3.2 REQ-NEW-D Workflow Chaining | ✅ shipped — PR #16 open（data model + executor + UI + 28 tests）；hotkey + Mode 4 dispatch 為 follow-up |
+| Sprint 3.2 REQ-NEW-D Workflow Chaining | ✅ shipped — PR #16 open（data model + executor + UI + Mode 4 dispatch 整合 + 37 tests / 288 total）；hotkey free-form binding 為 follow-up |
 
 ## 我接下來要做的事
 

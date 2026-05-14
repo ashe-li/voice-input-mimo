@@ -15,8 +15,8 @@ struct ToneRule: Equatable, Sendable, Codable {
     /// - exact match (`"com.apple.mail"` → matches that bundle only)
     /// - prefix match if the string ends with `"."` (`"com.tinyspeck.slackmacgap."`
     ///   matches anything starting with that string).
-    let bundleIDPrefix: String
-    let delegated: ToneDelegate
+    var bundleIDPrefix: String
+    var delegated: ToneDelegate
 
     init(bundleIDPrefix: String, delegated: ToneDelegate) {
         self.bundleIDPrefix = bundleIDPrefix

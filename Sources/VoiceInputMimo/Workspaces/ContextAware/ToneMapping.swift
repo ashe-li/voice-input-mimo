@@ -4,13 +4,13 @@ import Foundation
 /// dispatch path) or a named workflow chain (Sprint 3.2 — runs the chain
 /// via `WorkflowExecutor`). Keeping these in a sum type lets callers
 /// branch explicitly instead of overloading `RefineMode` with a fake case.
-enum ToneDelegate: Equatable, Sendable {
+enum ToneDelegate: Equatable, Sendable, Codable {
     case mode(RefineMode)
     case workflow(workflowId: String)
 }
 
 /// One mapping rule from a bundle-ID predicate to a delegated target.
-struct ToneRule: Equatable, Sendable {
+struct ToneRule: Equatable, Sendable, Codable {
     /// Match against `CapturedContext.bundleID`. Two flavors:
     /// - exact match (`"com.apple.mail"` → matches that bundle only)
     /// - prefix match if the string ends with `"."` (`"com.tinyspeck.slackmacgap."`
@@ -102,5 +102,12 @@ enum ToneMapping {
             return rule.delegated
         }
         return .mode(.refine)
+    }
+
+    /// Effective rule list = user rules first (highest precedence — first-match
+    /// wins), then default rules as fallback. User adds / overrides without
+    /// losing the shipped table.
+    static func effectiveRules(userRules: [ToneRule]) -> [ToneRule] {
+        userRules + defaultRules
     }
 }

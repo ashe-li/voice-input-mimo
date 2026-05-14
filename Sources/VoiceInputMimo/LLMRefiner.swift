@@ -149,7 +149,12 @@ final class LLMRefiner {
         switch Self.decideDispatch(
             rawMode: rawMode,
             delegate: rawMode == .contextAware
-                ? ToneMapping.resolve(context: ContextCapture.capture())
+                ? ToneMapping.resolve(
+                    context: ContextCapture.capture(),
+                    rules: ToneMapping.effectiveRules(
+                        userRules: (try? ToneMappingStore.shared.loadAll()) ?? []
+                    )
+                )
                 : nil,
             findWorkflow: { try? WorkflowStore.shared.find(id: $0) }
         ) {

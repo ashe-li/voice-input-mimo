@@ -26,6 +26,7 @@ struct SettingsRootView: View {
                     sidebarRow(.prompts)
                     sidebarRow(.glossary)
                     sidebarRow(.workflows)
+                    sidebarRow(.toneMapping)
                     sidebarRow(.history)
                 }
                 SidebarSection(title: "Info") {
@@ -53,10 +54,11 @@ struct SettingsRootView: View {
         case .shortcuts: ShortcutsPane()
         case .speech:    SpeechPane()
         case .asrServer: ASRServerPane()
-        case .prompts:   PromptsPane()
-        case .glossary:  GlossaryPane()
-        case .workflows: WorkflowsPane()
-        case .history:   HistoryPane()
+        case .prompts:     PromptsPane()
+        case .glossary:    GlossaryPane()
+        case .workflows:   WorkflowsPane()
+        case .toneMapping: ToneMappingPane()
+        case .history:     HistoryPane()
         case .about:     AboutPane()
         }
     }

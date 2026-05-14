@@ -11,6 +11,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
     case prompts
     case glossary
     case workflows
+    case toneMapping
     case history
     case about
 
@@ -25,6 +26,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .prompts: return "Prompts"
         case .glossary: return "Glossary"
         case .workflows: return "Workflows"
+        case .toneMapping: return "Tone Mapping"
         case .history: return "History"
         case .about: return "About"
         }
@@ -39,6 +41,7 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
         case .prompts: return "text.append"
         case .glossary: return "character.book.closed"
         case .workflows: return "arrow.triangle.branch"
+        case .toneMapping: return "rectangle.dashed.and.paperclip"
         case .history: return "clock.arrow.circlepath"
         case .about: return "info.circle"
         }

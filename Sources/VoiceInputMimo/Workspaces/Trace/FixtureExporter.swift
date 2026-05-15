@@ -175,14 +175,20 @@ enum FixtureExporter {
             throw ExportError.ioFailure("copyItem failed for \(entry.id): \(error.localizedDescription)")
         }
 
-        // Write transcript as UTF-8, no trailing newline
-        guard let txtData = entry.asrText.data(using: .utf8) else {
-            throw ExportError.ioFailure("asrText encoding failed for \(entry.id)")
-        }
-        do {
-            try txtData.write(to: txtDest, options: .atomic)
-        } catch {
-            throw ExportError.ioFailure("transcript write failed for \(entry.id): \(error.localizedDescription)")
+        // Transcript: preserve curated version. If <id>.txt already exists,
+        // assume the user has hand-corrected it as ASR ground truth and skip
+        // the write — the raw asrText would otherwise overwrite the
+        // correction every time fixtures are re-exported (auto-sync at
+        // launch, manual menu re-run, etc.).
+        if !fileManager.fileExists(atPath: txtDest.path) {
+            guard let txtData = entry.asrText.data(using: .utf8) else {
+                throw ExportError.ioFailure("asrText encoding failed for \(entry.id)")
+            }
+            do {
+                try txtData.write(to: txtDest, options: .atomic)
+            } catch {
+                throw ExportError.ioFailure("transcript write failed for \(entry.id): \(error.localizedDescription)")
+            }
         }
 
         return ExportResult(id: entry.id, wavDestination: wavDest, transcriptDestination: txtDest, skippedReason: nil)

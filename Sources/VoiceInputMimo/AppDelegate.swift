@@ -168,6 +168,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
             self?.warmUpASR()
         }
+
+        // Auto-sync fixtures at launch if a destination is remembered.
+        // Delayed 5s to stagger I/O after warmup and let UI settle.
+        // No remembered destination → silently skip (user hasn't configured).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+            self?.runFixtureExport(silent: true)
+        }
     }
 
     /// One-shot ASR warmup at launch. Fire-and-forget — smokeTranscribe
@@ -301,7 +308,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Stage 1: ASR via local-llm-backend gateway :4000 (was direct :8766 pre-cutover).
         overlayPanel.transition(to: .transcribing(elapsed: 0))
         startPhaseTimer { .transcribing(elapsed: $0) }
-        ASRClient.shared.transcribe(wavURL: wavURL) { [weak self] result in
+        ASRClient.shared.transcribe(
+            wavURL: wavURL,
+            onArchived: { [weak self] archivedURL in
+                // Repoint trace audioPath to the persistent archive copy so
+                // downstream fixture export / replay can find the file after
+                // AudioRecorder removes the tmp wav.
+                self?.tracer.updateAudioPath(archivedURL.path)
+            }
+        ) { [weak self] result in
             guard let self else { return }
             self.logLatency("ASR")
             self.stopPhaseTimer()
@@ -711,7 +726,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
 
         let exportFixturesItem = NSMenuItem(
-            title: "Export Fixtures...",
+            title: "匯出錄音與文字稿…",
             action: #selector(exportFixtures),
             keyEquivalent: ""
         )
@@ -948,36 +963,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         modelMemoryWindow.showAndStart()
     }
 
+    /// Menu action — manual export. Always interactive (silent=false): shows
+    /// alert on completion, and prompts for destination if none remembered.
     @objc private func exportFixtures() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Choose Export Destination"
-        panel.message = "Select a directory to export trace fixtures (audio + transcripts)"
-        guard panel.runModal() == .OK, let dest = panel.url else { return }
-        // Run I/O off the main queue so a large TraceStore doesn't freeze the
-        // menu / status bar.  showAlert must hop back to main since NSAlert
-        // is main-thread only.
-        DispatchQueue.global(qos: .userInitiated).async {
+        runFixtureExport(silent: false)
+    }
+
+    /// UserDefaults key for the remembered fixture export destination.
+    /// `silent=true` mode skips entirely when this key is absent.
+    private static let fixtureDestinationKey = "fixtureExportDestination"
+
+    /// Core fixture export flow used by both the menu action and launch
+    /// auto-sync.
+    ///
+    /// - `silent=false`: interactive — prompts for destination if missing,
+    ///   shows completion / failure alert.
+    /// - `silent=true`: launch auto-sync — no UI; skip if no destination
+    ///   remembered; log result via NSLog.
+    private func runFixtureExport(silent: Bool) {
+        let savedPath = UserDefaults.standard.string(forKey: Self.fixtureDestinationKey)
+        let destinationURL: URL
+
+        if let savedPath, FileManager.default.fileExists(atPath: savedPath) {
+            destinationURL = URL(fileURLWithPath: savedPath)
+        } else {
+            guard !silent else {
+                NSLog("[AppDelegate] Fixture auto-sync skipped: no destination configured")
+                return
+            }
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.allowsMultipleSelection = false
+            panel.prompt = "選擇匯出目錄"
+            panel.message = "選擇要存放錄音檔與文字稿的目錄(每筆 trace 會輸出 audio/*.wav + transcripts/*.txt 一組;之後 App 啟動時會自動同步到此目錄)"
+            guard panel.runModal() == .OK, let dest = panel.url else { return }
+            UserDefaults.standard.set(dest.path, forKey: Self.fixtureDestinationKey)
+            destinationURL = dest
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             do {
-                let results = try FixtureExporter.exportAll(destination: dest)
+                let results = try FixtureExporter.exportAll(destination: destinationURL)
                 let exported = results.filter { $0.skippedReason == nil }.count
                 let skipped = results.count - exported
-                DispatchQueue.main.async { [weak self] in
-                    self?.showAlert(
-                        title: "Fixture Export Done",
-                        message: "\(exported) exported, \(skipped) skipped\nDestination: \(dest.path)"
+                if silent {
+                    NSLog(
+                        "[AppDelegate] Fixture auto-sync: %d exported, %d skipped → %@",
+                        exported,
+                        skipped,
+                        destinationURL.path
                     )
+                } else {
+                    DispatchQueue.main.async { [weak self] in
+                        self?.showAlert(
+                            title: "匯出完成",
+                            message: "已匯出 \(exported) 筆,略過 \(skipped) 筆\n目的地:\(destinationURL.path)\n\n(App 啟動時會自動同步到此目錄,已校對的 transcript 不會被覆寫)"
+                        )
+                    }
                 }
             } catch {
-                DispatchQueue.main.async { [weak self] in
-                    self?.showAlert(
-                        title: "Fixture Export Failed",
-                        message: error.localizedDescription
-                    )
+                if silent {
+                    NSLog("[AppDelegate] Fixture auto-sync failed: %@", error.localizedDescription)
+                } else {
+                    DispatchQueue.main.async { [weak self] in
+                        self?.showAlert(title: "匯出失敗", message: error.localizedDescription)
+                    }
                 }
             }
+            _ = self // silence weak-self unused warning when silent
         }
     }
 

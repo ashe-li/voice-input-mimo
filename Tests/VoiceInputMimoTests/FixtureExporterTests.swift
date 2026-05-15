@@ -90,12 +90,18 @@ final class FixtureExporterTests: XCTestCase {
         XCTAssertNil(results[0].transcriptDestination)
     }
 
-    // MARK: - Test 3: skips entries with missing audio file
+    // MARK: - Test 3: skips entries with missing audio file (no archive copy)
 
     func testSkipsEntriesMissingAudioFile() throws {
         try store.append(makeEntry(id: "trace-missing", audioPath: "/nonexistent/path.wav", asrText: "text"))
 
-        let results = try FixtureExporter.exportAll(from: store, destination: exportDir)
+        // Inject lookup that never finds anything — test must not depend on
+        // the real `~/Library/.../recordings/` directory contents.
+        let results = try FixtureExporter.exportAll(
+            from: store,
+            destination: exportDir,
+            archiveLookup: { _ in nil }
+        )
 
         XCTAssertEqual(results.count, 1)
         XCTAssertNotNil(results[0].skippedReason)
@@ -103,6 +109,44 @@ final class FixtureExporterTests: XCTestCase {
             results[0].skippedReason?.contains("missing") == true,
             "skippedReason should contain 'missing', got: \(results[0].skippedReason ?? "nil")"
         )
+    }
+
+    // MARK: - Test 3b: archive fallback rescues stale tmp audioPath
+
+    func testArchiveFallbackResolvesStaleTmpAudioPath() throws {
+        // Simulate: trace audioPath points at a now-deleted tmp wav, but the
+        // archive directory still has a timestamp-prefixed copy.
+        let staleAudioPath = "/var/folders/fake/T/voice-input-mimo-ABCDEF.wav"
+        let archiveDir = tempRoot.appendingPathComponent("recordings")
+        let archivedFile = archiveDir.appendingPathComponent("20260515-120000-voice-input-mimo-ABCDEF.wav")
+        try makeFakeWav(at: archivedFile)
+
+        try store.append(makeEntry(id: "trace-arch", audioPath: staleAudioPath, asrText: "rescued from archive"))
+
+        let results = try FixtureExporter.exportAll(
+            from: store,
+            destination: exportDir,
+            archiveLookup: { originalName in
+                guard let entries = try? FileManager.default.contentsOfDirectory(atPath: archiveDir.path) else {
+                    return nil
+                }
+                if let match = entries.first(where: { $0.hasSuffix(originalName) }) {
+                    return archiveDir.appendingPathComponent(match).path
+                }
+                return nil
+            }
+        )
+
+        XCTAssertEqual(results.count, 1)
+        XCTAssertNil(results[0].skippedReason, "archive fallback should rescue stale tmp path")
+        XCTAssertNotNil(results[0].wavDestination)
+
+        let exportedWav = exportDir.appendingPathComponent("audio/trace-arch.wav")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: exportedWav.path))
+        XCTAssertEqual(try Data(contentsOf: exportedWav).count, 1024)
+
+        let exportedTxt = exportDir.appendingPathComponent("transcripts/trace-arch.txt")
+        XCTAssertEqual(try String(contentsOf: exportedTxt, encoding: .utf8), "rescued from archive")
     }
 
     // MARK: - Test 4: skips empty asrText
@@ -139,30 +183,39 @@ final class FixtureExporterTests: XCTestCase {
         )
     }
 
-    // MARK: - Test 6: overwrites existing destination files
+    // MARK: - Test 6: overwrites existing audio but preserves curated transcript
 
-    func testOverwritesExistingDestinationFiles() throws {
+    func testOverwritesAudioPreservesCuratedTranscript() throws {
         let wav = storeDir.appendingPathComponent("audio/trace-ow.wav")
         try makeFakeWav(at: wav)
-        try store.append(makeEntry(id: "trace-ow", audioPath: wav.path, asrText: "overwrite me"))
+        try store.append(makeEntry(id: "trace-ow", audioPath: wav.path, asrText: "raw asr output"))
 
-        // Pre-create conflicting file
+        // Pre-create conflicting files
         let existingAudio = exportDir.appendingPathComponent("audio/trace-ow.wav")
+        let existingTranscript = exportDir.appendingPathComponent("transcripts/trace-ow.txt")
         try FileManager.default.createDirectory(
             at: existingAudio.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
+        try FileManager.default.createDirectory(
+            at: existingTranscript.deletingLastPathComponent(),
+            withIntermediateDirectories: true
+        )
         try Data([0xFF]).write(to: existingAudio)
+        try "已校對版本".write(to: existingTranscript, atomically: true, encoding: .utf8)
 
-        // Should not throw
         let results = try FixtureExporter.exportAll(from: store, destination: exportDir)
 
         XCTAssertEqual(results.count, 1)
-        XCTAssertNil(results[0].skippedReason, "should overwrite without error")
+        XCTAssertNil(results[0].skippedReason, "should overwrite audio without error")
 
-        // File should be replaced with 1024-byte fake wav
-        let data = try Data(contentsOf: existingAudio)
-        XCTAssertEqual(data.count, 1024)
+        // Audio replaced with fresh 1024-byte fake wav
+        let audioData = try Data(contentsOf: existingAudio)
+        XCTAssertEqual(audioData.count, 1024)
+
+        // Transcript NOT overwritten — curated version still there
+        let txt = try String(contentsOf: existingTranscript, encoding: .utf8)
+        XCTAssertEqual(txt, "已校對版本", "curated transcript must be preserved across re-export")
     }
 
     // MARK: - Test 7: transcript UTF-8, no trailing newline

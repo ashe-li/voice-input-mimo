@@ -5,7 +5,7 @@ import SwiftUI
 struct HistoryPane: View {
     var body: some View {
         ClipboardHistoryView()
-            .navigationTitle("History")
+            .navigationTitle("歷史紀錄")
     }
 }
 

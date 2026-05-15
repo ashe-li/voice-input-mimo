@@ -24,15 +24,15 @@ struct WorkflowsPane: View {
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .navigationTitle("Workflows")
+        .navigationTitle("工作流程")
         .task { model.reload() }
     }
 
     @ViewBuilder
     private var header: some View {
         HStack(spacing: 12) {
-            SectionHeading("Workflows",
-                           subtitle: "Chain multiple LLM steps into a single pipeline")
+            SectionHeading("工作流程",
+                           subtitle: "把多個 LLM 步驟串成一條 pipeline")
             Spacer()
             if let banner = model.banner {
                 Text(banner)
@@ -63,7 +63,7 @@ struct WorkflowsPane: View {
                     Image(systemName: "plus")
                 }
                 .buttonStyle(.borderless)
-                .help("Add workflow")
+                .help("新增工作流程")
 
                 Button {
                     if let id = model.selection { model.delete(id: id) }
@@ -72,7 +72,7 @@ struct WorkflowsPane: View {
                 }
                 .buttonStyle(.borderless)
                 .disabled(model.selection == nil)
-                .help("Delete selected workflow")
+                .help("刪除選取的工作流程")
                 Spacer()
             }
             .padding(.horizontal, 12)
@@ -117,7 +117,7 @@ struct WorkflowsPane: View {
             Image(systemName: "arrow.triangle.branch")
                 .font(.system(size: 32))
                 .foregroundStyle(.tertiary)
-            Text("Select a workflow, or click + to create one")
+            Text("選擇一個工作流程，或按 + 建立新的")
                 .foregroundStyle(.secondary)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -131,7 +131,7 @@ private struct WorkflowRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(workflow.name.isEmpty ? "(unnamed)" : workflow.name)
+            Text(workflow.name.isEmpty ? "（未命名）" : workflow.name)
                 .font(.callout)
                 .foregroundStyle(workflow.name.isEmpty ? .secondary : .primary)
             Text(stepSummary)
@@ -143,7 +143,7 @@ private struct WorkflowRow: View {
     }
 
     private var stepSummary: String {
-        if workflow.steps.isEmpty { return "0 steps" }
+        if workflow.steps.isEmpty { return "0 步驟" }
         let names = workflow.steps.map { $0.mode.rawValue }
         return names.joined(separator: " → ")
     }
@@ -163,8 +163,8 @@ struct WorkflowEditor: View {
 
     var body: some View {
         Form {
-            Section("Name") {
-                TextField("Workflow name", text: Binding(
+            Section("名稱") {
+                TextField("工作流程名稱", text: Binding(
                     get: { workflow.name },
                     set: { v in var c = workflow; c.name = v; onChange(c) }
                 ))
@@ -191,29 +191,29 @@ struct WorkflowEditor: View {
                 Button {
                     onAddStep()
                 } label: {
-                    Label("Add step", systemImage: "plus")
+                    Label("新增步驟", systemImage: "plus")
                 }
             } header: {
-                Text("Steps (run top-to-bottom)")
+                Text("步驟（由上往下執行）")
             } footer: {
-                Text("Each step's output feeds the next step. Drag to reorder. Failure at any step stops the chain and falls back to the previous step's output.")
+                Text("每個步驟的輸出會餵給下一個步驟。可拖曳重新排序。任一步驟失敗就停止鏈，回退到上一步輸出。")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
 
-            Section("Output policy") {
-                Picker("Return", selection: Binding(
+            Section("輸出策略") {
+                Picker("回傳", selection: Binding(
                     get: { workflow.outputPolicy },
                     set: { v in var c = workflow; c.outputPolicy = v; onChange(c) }
                 )) {
-                    Text("Final step only").tag(WorkflowOutputPolicy.final)
-                    Text("All step outputs").tag(WorkflowOutputPolicy.verbose)
+                    Text("僅最後一步").tag(WorkflowOutputPolicy.final)
+                    Text("所有步驟輸出").tag(WorkflowOutputPolicy.verbose)
                 }
                 .pickerStyle(.segmented)
             }
 
             Section {
-                TextField("e.g. cmd+shift+1", text: Binding(
+                TextField("例如：cmd+shift+1", text: Binding(
                     get: { workflow.hotkey ?? "" },
                     set: { v in
                         var c = workflow
@@ -223,9 +223,9 @@ struct WorkflowEditor: View {
                     }
                 ))
             } header: {
-                Text("Hotkey (optional)")
+                Text("快捷鍵（選填）")
             } footer: {
-                Text("v1: value is stored but not globally bound yet — use the Run button above or Mode 4 dispatch (post PR #15) to invoke the chain. Free-form global hotkey binding is a follow-up.")
+                Text("v1：值會儲存但尚未全域綁定 — 請用上方的「執行」按鈕，或透過 Mode 4 dispatch（PR #15 之後）觸發此鏈。自由格式全域快捷鍵綁定為後續工作。")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -258,7 +258,7 @@ private struct WorkflowStepRow: View {
             .labelsHidden()
             .frame(width: 140)
 
-            TextField("profile id (optional)", text: Binding(
+            TextField("profile id（選填）", text: Binding(
                 get: { step.profileId ?? "" },
                 set: { v in
                     var c = step
@@ -275,7 +275,7 @@ private struct WorkflowStepRow: View {
                     .foregroundStyle(.red)
             }
             .buttonStyle(.borderless)
-            .help("Remove step")
+            .help("移除步驟")
         }
     }
 }
@@ -291,7 +291,7 @@ struct WorkflowPreview: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             HStack(spacing: 8) {
-                Text("Try it")
+                Text("試跑")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 Spacer()
@@ -301,7 +301,7 @@ struct WorkflowPreview: View {
                     if isRunning {
                         ProgressView().controlSize(.small)
                     } else {
-                        Label("Run", systemImage: "play.fill")
+                        Label("執行", systemImage: "play.fill")
                     }
                 }
                 .disabled(isRunning)
@@ -332,7 +332,7 @@ struct WorkflowPreview: View {
 
     private var resultText: String {
         guard let result else {
-            return isRunning ? "Running…" : "(Output appears here)"
+            return isRunning ? "執行中…" : "（輸出結果會顯示在這裡）"
         }
         if result.stepOutputs.isEmpty {
             return result.finalOutput

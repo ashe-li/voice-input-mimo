@@ -14,18 +14,18 @@ struct ASRServerPane: View {
 
         Form {
             Section {
-                LabeledContent("Server dir") {
+                LabeledContent("伺服器目錄") {
                     HStack(spacing: 6) {
                         TextField("~/Documents/voice-input-mimo/server", text: $vm.serverDir)
                             .textFieldStyle(.roundedBorder)
-                        Button("Browse…") { browseDirectory(into: $vm.serverDir) }
+                        Button("瀏覽…") { browseDirectory(into: $vm.serverDir) }
                     }
                 }
                 LabeledContent("Python") {
                     HStack(spacing: 6) {
                         TextField("<server>/.venv/bin/python", text: $vm.serverPython)
                             .textFieldStyle(.roundedBorder)
-                        Button("Browse…") { browseFile(into: $vm.serverPython) }
+                        Button("瀏覽…") { browseFile(into: $vm.serverPython) }
                     }
                 }
                 LabeledContent("Port") {
@@ -33,31 +33,31 @@ struct ASRServerPane: View {
                         .textFieldStyle(.roundedBorder)
                         .frame(maxWidth: 100, alignment: .leading)
                 }
-                Picker("Precision", selection: $vm.serverPrecision) {
+                Picker("精度", selection: $vm.serverPrecision) {
                     ForEach(precisions, id: \.self) { Text($0).tag($0) }
                 }
-                LabeledContent("Model root") {
+                LabeledContent("Model 根目錄") {
                     HStack(spacing: 6) {
                         TextField("~/.cache/mimo-asr", text: $vm.serverModelRoot)
                             .textFieldStyle(.roundedBorder)
-                        Button("Browse…") { browseDirectory(into: $vm.serverModelRoot) }
+                        Button("瀏覽…") { browseDirectory(into: $vm.serverModelRoot) }
                     }
                 }
-                Toggle("Preload model on startup (avoids 1 s+ cold-start tax)", isOn: $vm.serverPreload)
+                Toggle("啟動時預載模型（避免 1 秒以上冷啟延遲）", isOn: $vm.serverPreload)
             } header: {
-                SectionHeading("ASR Server", subtitle: "Local supervised Python process")
+                SectionHeading("ASR 伺服器", subtitle: "本機監管的 Python process")
             }
 
             Section {
                 HStack {
                     StatusLineView(status: vm.serverStatus)
-                    Button("Apply & Restart Server") { vm.applyAndRestartServer() }
+                    Button("套用並重啟伺服器") { vm.applyAndRestartServer() }
                         .keyboardShortcut(.defaultAction)
                 }
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("ASR Server")
+        .navigationTitle("ASR 伺服器")
     }
 
     // MARK: - File browsers
@@ -67,7 +67,7 @@ struct ASRServerPane: View {
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
-        panel.title = "Select directory"
+        panel.title = "選擇目錄"
         if panel.runModal() == .OK, let url = panel.url {
             binding.wrappedValue = url.path
         }
@@ -78,7 +78,7 @@ struct ASRServerPane: View {
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = false
-        panel.title = "Select python executable"
+        panel.title = "選擇 python 執行檔"
         if panel.runModal() == .OK, let url = panel.url {
             binding.wrappedValue = url.path
         }

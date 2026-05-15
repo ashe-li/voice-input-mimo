@@ -18,27 +18,27 @@ struct SpeechPane: View {
                     TextField("http://127.0.0.1:4000", text: $vm.asrBaseURL)
                         .textFieldStyle(.roundedBorder)
                 }
-                Picker("Language", selection: $vm.asrLanguage) {
+                Picker("語言", selection: $vm.asrLanguage) {
                     ForEach(languages, id: \.self) { Text($0).tag($0) }
                 }
-                Picker("Output locale", selection: $vm.asrOutputLocale) {
+                Picker("輸出語系", selection: $vm.asrOutputLocale) {
                     ForEach(locales, id: \.self) { Text($0).tag($0) }
                 }
             } header: {
-                SectionHeading("Speech Recognition", subtitle: "Whisper-compat endpoint + zh-TW post-process")
+                SectionHeading("語音辨識", subtitle: "Whisper 相容端點 + zh-TW 後處理")
             }
 
             Section {
                 HStack {
                     StatusLineView(status: vm.asrProbeStatus)
-                    Button("Probe ASR") { vm.probeASR() }
-                    Button("Save") { vm.save() }
+                    Button("測試 ASR") { vm.probeASR() }
+                    Button("儲存") { vm.save() }
                         .keyboardShortcut(.defaultAction)
                 }
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("Speech Recognition")
+        .navigationTitle("語音辨識")
     }
 }
 

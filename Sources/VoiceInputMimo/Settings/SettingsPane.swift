@@ -19,16 +19,16 @@ enum SettingsPane: String, CaseIterable, Identifiable, Hashable {
 
     var title: String {
         switch self {
-        case .general: return "General"
-        case .shortcuts: return "Shortcuts"
-        case .speech: return "Speech Recognition"
-        case .asrServer: return "ASR Server"
+        case .general: return "一般"
+        case .shortcuts: return "快捷鍵"
+        case .speech: return "語音辨識"
+        case .asrServer: return "ASR 伺服器"
         case .prompts: return "Prompts"
         case .glossary: return "Glossary"
-        case .workflows: return "Workflows"
-        case .toneMapping: return "Tone Mapping"
-        case .history: return "History"
-        case .about: return "About"
+        case .workflows: return "工作流程"
+        case .toneMapping: return "對應規則"
+        case .history: return "歷史紀錄"
+        case .about: return "關於"
         }
     }
 

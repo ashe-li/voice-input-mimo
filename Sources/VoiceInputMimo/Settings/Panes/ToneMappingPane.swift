@@ -20,15 +20,15 @@ struct ToneMappingPane: View {
                 contentArea.frame(maxWidth: .infinity, maxHeight: .infinity)
             }
         }
-        .navigationTitle("Tone Mapping")
+        .navigationTitle("對應規則")
         .task { model.reload() }
     }
 
     @ViewBuilder
     private var header: some View {
         HStack(spacing: 12) {
-            SectionHeading("Tone Mapping",
-                           subtitle: "Map app bundle IDs to a mode or workflow. User rules win over the built-in table.")
+            SectionHeading("對應規則",
+                           subtitle: "把 app 的 bundle ID 對應到一個模式或工作流程。使用者規則優先於內建表。")
             Spacer()
             if let banner = model.banner {
                 Text(banner).font(.caption).foregroundStyle(.secondary).lineLimit(1)
@@ -57,7 +57,7 @@ struct ToneMappingPane: View {
                     Image(systemName: "plus")
                 }
                 .buttonStyle(.borderless)
-                .help("Add rule")
+                .help("新增規則")
 
                 Button {
                     if let i = model.selectionIndex { model.delete(at: i) }
@@ -66,7 +66,7 @@ struct ToneMappingPane: View {
                 }
                 .buttonStyle(.borderless)
                 .disabled(model.selectionIndex == nil)
-                .help("Delete selected rule")
+                .help("刪除選取的規則")
                 Spacer()
             }
             .padding(.horizontal, 12)
@@ -94,9 +94,9 @@ struct ToneMappingPane: View {
             Image(systemName: "rectangle.dashed.and.paperclip")
                 .font(.system(size: 32))
                 .foregroundStyle(.tertiary)
-            Text("Add a rule, or select one from the sidebar")
+            Text("新增規則，或從側欄選一條")
                 .foregroundStyle(.secondary)
-            Text("Built-in rules (Mail / Cursor / Notion / …) stay active automatically.")
+            Text("內建規則（Mail / Cursor / Notion / …）會自動生效。")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         }
@@ -113,7 +113,7 @@ private struct ToneMappingRow: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text(rule.bundleIDPrefix.isEmpty ? "(empty)" : rule.bundleIDPrefix)
+            Text(rule.bundleIDPrefix.isEmpty ? "（未填）" : rule.bundleIDPrefix)
                 .font(.callout)
                 .foregroundStyle(rule.bundleIDPrefix.isEmpty ? .secondary : .primary)
                 .lineLimit(1)
@@ -131,7 +131,7 @@ private struct ToneMappingRow: View {
         case .mode(let m): return "→ \(m.rawValue)"
         case .workflow(let id):
             let name = workflows.first(where: { $0.id == id })?.name
-            return "→ workflow: \(name ?? id)"
+            return "→ 工作流程：\(name ?? id)"
         }
     }
 }
@@ -169,20 +169,20 @@ private struct ToneRuleEditor: View {
     var body: some View {
         Form {
             Section {
-                TextField("Bundle ID (e.g., com.apple.mail) or prefix ending in dot", text: Binding(
+                TextField("Bundle ID（例如 com.apple.mail）或以「.」結尾的前綴", text: Binding(
                     get: { rule.bundleIDPrefix },
                     set: { v in var c = rule; c.bundleIDPrefix = v; onChange(c) }
                 ))
             } header: {
                 Text("Bundle ID")
             } footer: {
-                Text("Exact match unless the value ends with a trailing dot (then it matches anything starting with that prefix).")
+                Text("預設為精確比對；若值以「.」結尾，則改為前綴比對（匹配以此開頭的任何 bundle）。")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
 
             Section {
-                Picker("Type", selection: Binding<DelegateKind>(
+                Picker("類型", selection: Binding<DelegateKind>(
                     get: { currentKind },
                     set: { kind in
                         var c = rule
@@ -196,14 +196,14 @@ private struct ToneRuleEditor: View {
                         onChange(c)
                     }
                 )) {
-                    Text("Mode").tag(DelegateKind.mode)
-                    Text("Workflow").tag(DelegateKind.workflow)
+                    Text("模式").tag(DelegateKind.mode)
+                    Text("工作流程").tag(DelegateKind.workflow)
                 }
                 .pickerStyle(.segmented)
 
                 switch currentKind {
                 case .mode:
-                    Picker("Mode", selection: Binding<RefineMode>(
+                    Picker("模式", selection: Binding<RefineMode>(
                         get: { currentMode },
                         set: { v in var c = rule; c.delegated = .mode(v); onChange(c) }
                     )) {
@@ -215,9 +215,9 @@ private struct ToneRuleEditor: View {
                     workflowPicker
                 }
             } header: {
-                Text("Delegate")
+                Text("委派目標")
             } footer: {
-                Text("Mode dispatches a single LLM call. Workflow runs the named chain end-to-end via WorkflowExecutor.")
+                Text("「模式」會發送單一 LLM call；「工作流程」會透過 WorkflowExecutor 端到端執行指定的鏈。")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -228,11 +228,11 @@ private struct ToneRuleEditor: View {
     @ViewBuilder
     private var workflowPicker: some View {
         if availableWorkflows.isEmpty {
-            Text("No workflows defined yet — create one in Settings → Workspace → Workflows first.")
+            Text("尚未定義工作流程 — 請先到「設定 → 工作區 → 工作流程」新增一個。")
                 .font(.caption2)
                 .foregroundStyle(.secondary)
         } else {
-            Picker("Workflow", selection: Binding<String>(
+            Picker("工作流程", selection: Binding<String>(
                 get: {
                     if case .workflow(let id) = rule.delegated { return id }
                     return availableWorkflows.first?.id ?? ""

@@ -15,7 +15,7 @@ struct SpeechPane: View {
         Form {
             Section {
                 LabeledContent("Base URL") {
-                    TextField("http://127.0.0.1:8765", text: $vm.asrBaseURL)
+                    TextField("http://127.0.0.1:4000", text: $vm.asrBaseURL)
                         .textFieldStyle(.roundedBorder)
                 }
                 Picker("Language", selection: $vm.asrLanguage) {

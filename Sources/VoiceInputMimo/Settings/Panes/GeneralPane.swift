@@ -23,7 +23,7 @@ struct GeneralPane: View {
 
             Section {
                 LabeledContent("Base URL") {
-                    TextField("http://127.0.0.1:8082/v1", text: $vm.llmBaseURL)
+                    TextField("http://127.0.0.1:4000/v1", text: $vm.llmBaseURL)
                         .textFieldStyle(.roundedBorder)
                 }
                 LabeledContent("API Key (optional)") {

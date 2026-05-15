@@ -90,12 +90,18 @@ final class FixtureExporterTests: XCTestCase {
         XCTAssertNil(results[0].transcriptDestination)
     }
 
-    // MARK: - Test 3: skips entries with missing audio file
+    // MARK: - Test 3: skips entries with missing audio file (no archive copy)
 
     func testSkipsEntriesMissingAudioFile() throws {
         try store.append(makeEntry(id: "trace-missing", audioPath: "/nonexistent/path.wav", asrText: "text"))
 
-        let results = try FixtureExporter.exportAll(from: store, destination: exportDir)
+        // Inject lookup that never finds anything — test must not depend on
+        // the real `~/Library/.../recordings/` directory contents.
+        let results = try FixtureExporter.exportAll(
+            from: store,
+            destination: exportDir,
+            archiveLookup: { _ in nil }
+        )
 
         XCTAssertEqual(results.count, 1)
         XCTAssertNotNil(results[0].skippedReason)
@@ -103,6 +109,44 @@ final class FixtureExporterTests: XCTestCase {
             results[0].skippedReason?.contains("missing") == true,
             "skippedReason should contain 'missing', got: \(results[0].skippedReason ?? "nil")"
         )
+    }
+
+    // MARK: - Test 3b: archive fallback rescues stale tmp audioPath
+
+    func testArchiveFallbackResolvesStaleTmpAudioPath() throws {
+        // Simulate: trace audioPath points at a now-deleted tmp wav, but the
+        // archive directory still has a timestamp-prefixed copy.
+        let staleAudioPath = "/var/folders/fake/T/voice-input-mimo-ABCDEF.wav"
+        let archiveDir = tempRoot.appendingPathComponent("recordings")
+        let archivedFile = archiveDir.appendingPathComponent("20260515-120000-voice-input-mimo-ABCDEF.wav")
+        try makeFakeWav(at: archivedFile)
+
+        try store.append(makeEntry(id: "trace-arch", audioPath: staleAudioPath, asrText: "rescued from archive"))
+
+        let results = try FixtureExporter.exportAll(
+            from: store,
+            destination: exportDir,
+            archiveLookup: { originalName in
+                guard let entries = try? FileManager.default.contentsOfDirectory(atPath: archiveDir.path) else {
+                    return nil
+                }
+                if let match = entries.first(where: { $0.hasSuffix(originalName) }) {
+                    return archiveDir.appendingPathComponent(match).path
+                }
+                return nil
+            }
+        )
+
+        XCTAssertEqual(results.count, 1)
+        XCTAssertNil(results[0].skippedReason, "archive fallback should rescue stale tmp path")
+        XCTAssertNotNil(results[0].wavDestination)
+
+        let exportedWav = exportDir.appendingPathComponent("audio/trace-arch.wav")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: exportedWav.path))
+        XCTAssertEqual(try Data(contentsOf: exportedWav).count, 1024)
+
+        let exportedTxt = exportDir.appendingPathComponent("transcripts/trace-arch.txt")
+        XCTAssertEqual(try String(contentsOf: exportedTxt, encoding: .utf8), "rescued from archive")
     }
 
     // MARK: - Test 4: skips empty asrText

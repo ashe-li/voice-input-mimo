@@ -42,7 +42,11 @@ final class ASRClient {
 
     private var currentTask: URLSessionDataTask?
 
-    func transcribe(wavURL: URL, completion: @escaping (Result<TranscribeResult, Error>) -> Void) {
+    func transcribe(
+        wavURL: URL,
+        onArchived: ((URL) -> Void)? = nil,
+        completion: @escaping (Result<TranscribeResult, Error>) -> Void
+    ) {
         let trimmed = baseURL.hasSuffix("/") ? String(baseURL.dropLast()) : baseURL
         guard let url = URL(string: "\(trimmed)/v1/audio/transcriptions") else {
             completion(.failure(ASRError.invalidURL))
@@ -95,8 +99,11 @@ final class ASRClient {
 
         currentTask = URLSession.shared.dataTask(with: request) { data, response, error in
             // Archive wav to retention dir (LRU: keep last N files OR <= M MB)
-            RecordingArchive.archive(wavURL, audioBytes: audioData.count)
+            let archivedURL = RecordingArchive.archive(wavURL, audioBytes: audioData.count)
             try? FileManager.default.removeItem(at: wavURL)
+            if let archivedURL, let onArchived {
+                DispatchQueue.main.async { onArchived(archivedURL) }
+            }
 
             if let data, let http = response as? HTTPURLResponse, (200...299).contains(http.statusCode) {
                 if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],

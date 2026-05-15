@@ -21,13 +21,40 @@ enum FixtureExporter {
         case ioFailure(String)
     }
 
+    /// Resolves an original tmp wav lastPathComponent to the archived copy
+    /// (if any). Returns the absolute archive path or nil.
+    /// Injected by tests; default reads `RecordingArchive.directory`.
+    typealias ArchiveLookup = (_ originalLastComponent: String) -> String?
+
+    /// Default archive lookup — scans `RecordingArchive.directory` for a
+    /// filename ending in `<originalLastComponent>` (Archive prefixes a
+    /// timestamp to the original wav filename, so suffix-match recovers it).
+    static func defaultArchiveLookup(_ originalName: String) -> String? {
+        let fm = FileManager.default
+        let dir = RecordingArchive.directory
+        guard let entries = try? fm.contentsOfDirectory(atPath: dir.path) else {
+            return nil
+        }
+        if let match = entries.first(where: { $0.hasSuffix(originalName) }) {
+            return dir.appendingPathComponent(match).path
+        }
+        return nil
+    }
+
     /// Export all eligible entries from `store` to `destination`.
     ///
     /// Filter rules (applied in order):
     /// 1. `audioPath == nil`                       → skip, "no audio path"
-    /// 2. audio file does not exist on disk         → skip, "audio file missing: <path>"
+    /// 2. audio file does not exist AND no archive copy → skip,
+    ///    "audio file missing (also not in archive): <path>"
     /// 3. `asrText.isEmpty`                         → skip, "empty asr text"
     /// 4. `endedAt - startedAt < minDurationSeconds`→ skip, "below min duration: <X>s"
+    ///
+    /// Filter 2 archive fallback: when `audioPath` points to a stale tmp
+    /// location (AudioRecorder removed it after archiving), `archiveLookup`
+    /// is consulted to recover the persistent copy under
+    /// `~/Library/Application Support/VoiceInputMimo/recordings/` (filename
+    /// `<timestamp>-<original>.wav`, suffix-matched).
     ///
     /// Passing entries are copied (not moved) so the TraceStore-managed
     /// source files remain intact.  Existing destination files are silently
@@ -42,7 +69,8 @@ enum FixtureExporter {
         from store: TraceStore = .shared,
         destination: URL,
         minDurationSeconds: Double = 0.5,
-        fileManager: FileManager = .default
+        fileManager: FileManager = .default,
+        archiveLookup: @escaping ArchiveLookup = defaultArchiveLookup
     ) throws -> [ExportResult] {
         let entries = try store.loadAll()
 
@@ -62,7 +90,8 @@ enum FixtureExporter {
                 audioDir: audioDir,
                 transcriptDir: transcriptDir,
                 minDurationSeconds: minDurationSeconds,
-                fileManager: fileManager
+                fileManager: fileManager,
+                archiveLookup: archiveLookup
             )
         }
     }
@@ -74,7 +103,8 @@ enum FixtureExporter {
         audioDir: URL,
         transcriptDir: URL,
         minDurationSeconds: Double,
-        fileManager: FileManager
+        fileManager: FileManager,
+        archiveLookup: ArchiveLookup
     ) throws -> ExportResult {
         // Filter 0: id must be a safe filename component — reject path
         // separators, parent-directory markers, and empties to prevent the
@@ -92,9 +122,22 @@ enum FixtureExporter {
             return ExportResult(id: entry.id, wavDestination: nil, transcriptDestination: nil, skippedReason: "no audio path")
         }
 
-        // Filter 2: audio file must exist on disk
-        guard fileManager.fileExists(atPath: audioPath) else {
-            return ExportResult(id: entry.id, wavDestination: nil, transcriptDestination: nil, skippedReason: "audio file missing: \(audioPath)")
+        // Filter 2: resolve the actual on-disk location. Prefer the stored
+        // path; fall back to archive lookup when the stored path is a stale
+        // tmp reference (older traces written before lifecycle fix).
+        let resolvedAudioPath: String
+        if fileManager.fileExists(atPath: audioPath) {
+            resolvedAudioPath = audioPath
+        } else if let archived = archiveLookup((audioPath as NSString).lastPathComponent),
+                  fileManager.fileExists(atPath: archived) {
+            resolvedAudioPath = archived
+        } else {
+            return ExportResult(
+                id: entry.id,
+                wavDestination: nil,
+                transcriptDestination: nil,
+                skippedReason: "audio file missing (also not in archive): \(audioPath)"
+            )
         }
 
         // Filter 3: asrText must be non-empty
@@ -127,7 +170,7 @@ enum FixtureExporter {
             }
         }
         do {
-            try fileManager.copyItem(atPath: audioPath, toPath: wavDest.path)
+            try fileManager.copyItem(atPath: resolvedAudioPath, toPath: wavDest.path)
         } catch {
             throw ExportError.ioFailure("copyItem failed for \(entry.id): \(error.localizedDescription)")
         }

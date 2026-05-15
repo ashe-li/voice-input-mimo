@@ -2,16 +2,17 @@ import Foundation
 
 /// Local-only WAV retention. Copies wav into Application Support and prunes
 /// LRU until both quotas hold:
-///   - max files (default 10)
-///   - total bytes (default 10 MB)
+///   - max files (default 10000 — bytes quota is primary; high cap avoids
+///     premature prune when many small clips accumulate)
+///   - total bytes (default 1 GB)
 ///
 /// Toggleable via UserDefaults:
 ///   - recordingArchiveEnabled (Bool, default true)
-///   - recordingArchiveMaxFiles (Int, default 10)
-///   - recordingArchiveMaxBytes (Int, default 10 * 1024 * 1024)
+///   - recordingArchiveMaxFiles (Int, default 10000)
+///   - recordingArchiveMaxBytes (Int, default 1024 * 1024 * 1024)
 enum RecordingArchive {
-    private static let defaultMaxFiles = 10
-    private static let defaultMaxBytes = 10 * 1024 * 1024
+    private static let defaultMaxFiles = 10_000
+    private static let defaultMaxBytes = 1024 * 1024 * 1024
 
     static var isEnabled: Bool {
         UserDefaults.standard.object(forKey: "recordingArchiveEnabled") as? Bool ?? true
@@ -36,10 +37,17 @@ enum RecordingArchive {
         return dir
     }
 
-    /// Copy wav into archive dir, then prune LRU.
+    /// Copy wav into archive dir, then prune LRU. Returns the archived
+    /// destination URL so callers (e.g. RecordingTracer) can pin the
+    /// persistent path into the trace entry — fixes the lifecycle break
+    /// where Tracer kept the soon-to-be-deleted tmp path while Archive
+    /// silently held the only surviving copy.
+    ///
     /// `audioBytes` is the in-memory size already known by caller (avoids extra stat).
-    static func archive(_ wavURL: URL, audioBytes: Int) {
-        guard isEnabled else { return }
+    /// Returns nil when archive is disabled or the copy failed.
+    @discardableResult
+    static func archive(_ wavURL: URL, audioBytes: Int) -> URL? {
+        guard isEnabled else { return nil }
         let fm = FileManager.default
         let stamp = Self.timestamp()
         let dest = directory.appendingPathComponent("\(stamp)-\(wavURL.lastPathComponent)")
@@ -47,9 +55,10 @@ enum RecordingArchive {
             try fm.copyItem(at: wavURL, to: dest)
         } catch {
             NSLog("[RecordingArchive] copy failed: %@", error.localizedDescription)
-            return
+            return nil
         }
         prune()
+        return dest
     }
 
     /// Drop oldest files until file count ≤ maxFiles AND total bytes ≤ maxBytes.

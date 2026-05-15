@@ -301,7 +301,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Stage 1: ASR via local-llm-backend gateway :4000 (was direct :8766 pre-cutover).
         overlayPanel.transition(to: .transcribing(elapsed: 0))
         startPhaseTimer { .transcribing(elapsed: $0) }
-        ASRClient.shared.transcribe(wavURL: wavURL) { [weak self] result in
+        ASRClient.shared.transcribe(
+            wavURL: wavURL,
+            onArchived: { [weak self] archivedURL in
+                // Repoint trace audioPath to the persistent archive copy so
+                // downstream fixture export / replay can find the file after
+                // AudioRecorder removes the tmp wav.
+                self?.tracer.updateAudioPath(archivedURL.path)
+            }
+        ) { [weak self] result in
             guard let self else { return }
             self.logLatency("ASR")
             self.stopPhaseTimer()

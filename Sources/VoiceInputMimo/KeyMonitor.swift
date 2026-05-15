@@ -16,9 +16,12 @@ final class KeyMonitor {
 
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-    private var fnPressed = false
-    private var activeKeyCode: Int64?
-    private var parkActive = false
+    // Internal (not private) so KeyMonitorRecoveryTests can drive the
+    // tap-disabled recovery path without spinning up a real CGEventTap
+    // (which would require accessibility permission + can't be observed).
+    var fnPressed = false
+    var activeKeyCode: Int64?
+    var parkActive = false
     private var cachedShortcuts: [ShortcutBinding]?
     private var cachedCycleEnabled: Bool?
     private var cachedParkEnabled: Bool?
@@ -90,14 +93,45 @@ final class KeyMonitor {
 
     // MARK: - Private
 
+    /// Reset any stuck press state when the system disables the tap. Calls
+    /// the matching key-up callback so the recorder / park-mode pipeline
+    /// rolls back to idle. Invoked from `handle()` on the tap-disabled
+    /// branch; safe to call when no state is stuck (no callbacks fire).
+    /// Internal (not private) so tests can invoke it directly without
+    /// fabricating CGEventTap-disabled events.
+    func recoverStuckStateOnTapDisable() {
+        if fnPressed {
+            NSLog("[KeyMonitor] recovering stuck fnPressed — synthesizing onFnUp")
+            fnPressed = false
+            DispatchQueue.main.async { [weak self] in self?.onFnUp?() }
+        }
+        if activeKeyCode != nil {
+            NSLog("[KeyMonitor] recovering stuck activeKeyCode — synthesizing onFnUp")
+            activeKeyCode = nil
+            DispatchQueue.main.async { [weak self] in self?.onFnUp?() }
+        }
+        if parkActive {
+            NSLog("[KeyMonitor] recovering stuck parkActive — synthesizing onParkUp")
+            parkActive = false
+            DispatchQueue.main.async { [weak self] in self?.onParkUp?() }
+        }
+    }
+
     private func handle(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
-        // Re-enable tap if the system disabled it
+        // Re-enable tap if the system disabled it. Defensive recovery: if a
+        // key-down event fired before the disable but the matching key-up
+        // landed inside the disabled window, the state machine would stay
+        // stuck (`fnPressed = true` / `activeKeyCode != nil` / `parkActive`)
+        // and the app would record forever. Synthesize the missing release
+        // on the main queue so downstream callbacks transition out of
+        // "Listening" cleanly.
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             NSLog("[KeyMonitor] tap disabled by %@ — re-enabling",
                   type == .tapDisabledByTimeout ? "timeout" : "user input")
             if let tap = eventTap {
                 CGEvent.tapEnable(tap: tap, enable: true)
             }
+            recoverStuckStateOnTapDisable()
             return Unmanaged.passUnretained(event)
         }
 

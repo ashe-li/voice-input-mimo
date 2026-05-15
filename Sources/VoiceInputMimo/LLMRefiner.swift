@@ -128,7 +128,23 @@ final class LLMRefiner {
         skills: BuiltinPromptCatalog.skills
     )
 
+    /// Protocol-conformance entry point matching `Refining.refine`. Forwards
+    /// to the captured-context variant with `nil` so non-recording callers
+    /// (Settings "Test" button, Prompts pane preview) keep the original
+    /// late-capture behavior — they have no hotkey moment to snapshot from.
     func refine(_ text: String, requestId: String = "", mode: RefineMode? = nil, force: Bool = false,
+                completion: @escaping (Result<String, Error>) -> Void) {
+        refine(text, requestId: requestId, mode: mode, force: force,
+               capturedContext: nil, completion: completion)
+    }
+
+    /// Recording-path entry point. `capturedContext` is the frontmost-app
+    /// snapshot taken at hotkey-down time (see `AppDelegate.fnDown`). When
+    /// non-nil, `.contextAware` dispatch routes via that bundle ID instead
+    /// of re-capturing at refine() time (which would observe the wrong
+    /// frontmost after ASR latency / focus changes).
+    func refine(_ text: String, requestId: String = "", mode: RefineMode? = nil, force: Bool = false,
+                capturedContext: CapturedContext?,
                 completion: @escaping (Result<String, Error>) -> Void) {
         guard force || (isEnabled && isConfigured) else {
             completion(.success(text))
@@ -150,7 +166,14 @@ final class LLMRefiner {
             rawMode: rawMode,
             delegate: rawMode == .contextAware
                 ? ToneMapping.resolve(
-                    context: ContextCapture.capture(),
+                    // Prefer the context captured at hotkey-down time. By the
+                    // time refine() runs, ASR has already finished and the
+                    // user may have switched focus (or the HUD overlay may
+                    // have stolen frontmost) — late capture would route to
+                    // the wrong app's rule. fall back to a live capture only
+                    // when callers don't pre-capture (e.g. tests, Settings
+                    // "Test" button).
+                    context: capturedContext ?? ContextCapture.capture(),
                     rules: ToneMapping.effectiveRules(
                         userRules: (try? ToneMappingStore.shared.loadAll()) ?? []
                     )

@@ -38,6 +38,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // can show the original text alongside the translated output.
     private var currentZH: String = ""
 
+    // Snapshot of the frontmost-app context captured at the moment the
+    // recording hotkey is pressed. Used for `.contextAware` dispatch instead
+    // of late-capturing inside `LLMRefiner.refine`. By the time refine() runs,
+    // ASR has already completed and the user may have switched focus — late
+    // capture would route to the wrong app's tone-mapping rule (Mode 4
+    // misjudgment). Cleared after the LLM call completes / errors.
+    private var contextAtKeyDown: CapturedContext?
+
     // Cancellable "show .refining after holding ZH for 0.4 s" deferred work.
     // If the LLM completes within 0.4 s we cancel this so the overlay isn't
     // resurrected back to .refining after .bothReady.
@@ -277,6 +285,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ASRClient.shared.cancel()
         isRecording = true
         currentZH = ""
+        // Snapshot frontmost BEFORE any UI work that might steal focus (HUD
+        // is a non-activating panel, but be defensive — and the user's
+        // intent is captured at the moment of press, not at ASR-completion).
+        contextAtKeyDown = ContextCapture.capture()
         tracer.begin()
 
         updateStatusIcon(recording: true)
@@ -399,12 +411,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
             }
 
-            refiner.refine(trimmed, requestId: requestId) { [weak self] result in
+            refiner.refine(
+                trimmed,
+                requestId: requestId,
+                capturedContext: contextAtKeyDown
+            ) { [weak self] result in
                 guard let self else { return }
                 self.logLatency("refine")
                 self.refiningHoldWork?.cancel()
                 self.refiningHoldWork = nil
                 self.stopPhaseTimer()
+                // Recording cycle complete — clear the captured context so a
+                // subsequent fnDown() recaptures fresh (avoid stale carry-over
+                // across recordings).
+                self.contextAtKeyDown = nil
                 switch result {
                 case .success(let refined):
                     let final = refined.isEmpty ? trimmed : refined

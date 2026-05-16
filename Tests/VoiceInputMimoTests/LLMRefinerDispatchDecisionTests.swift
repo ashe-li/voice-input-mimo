@@ -176,4 +176,82 @@ final class LLMRefinerDispatchDecisionTests: XCTestCase {
         XCTAssertEqual(dispatch, .singleMode(.refine),
                        "Self-bundle with no matching rule falls back to refine — this is the bug that B3 prevents by capturing at keydown")
     }
+
+    // MARK: - makeRoutingTelemetry
+
+    func testMakeRoutingTelemetry_NilMatchReturnsNil() {
+        // Non-contextAware modes pass match=nil → no telemetry emitted.
+        let routing = LLMRefiner.makeRoutingTelemetry(
+            match: nil,
+            decision: .singleMode(.claudeCode)
+        )
+        XCTAssertNil(routing)
+    }
+
+    func testMakeRoutingTelemetry_UserMatchEncodesAllFields() {
+        let match = ToneMatch(
+            source: .user,
+            index: 2,
+            prefix: "com.example.editor",
+            delegate: .mode(.structure)
+        )
+        let routing = LLMRefiner.makeRoutingTelemetry(
+            match: match,
+            decision: .singleMode(.structure)
+        )
+        XCTAssertEqual(routing?.matchedSource, "user")
+        XCTAssertEqual(routing?.matchedIndex, 2)
+        XCTAssertEqual(routing?.matchedPrefix, "com.example.editor")
+        XCTAssertEqual(routing?.dispatchedTo, "mode:structure")
+    }
+
+    func testMakeRoutingTelemetry_FallbackHasNilIndexAndPrefix() {
+        let match = ToneMatch(
+            source: .fallback,
+            index: nil,
+            prefix: nil,
+            delegate: .mode(.refine)
+        )
+        let routing = LLMRefiner.makeRoutingTelemetry(
+            match: match,
+            decision: .singleMode(.refine)
+        )
+        XCTAssertEqual(routing?.matchedSource, "fallback")
+        XCTAssertNil(routing?.matchedIndex)
+        XCTAssertNil(routing?.matchedPrefix)
+        XCTAssertEqual(routing?.dispatchedTo, "mode:refine")
+    }
+
+    func testMakeRoutingTelemetry_WorkflowDispatchEncodesWorkflowId() {
+        let wf = Workflow(id: "wf-test", name: "Test", steps: [
+            WorkflowStep(mode: .refine)
+        ])
+        let match = ToneMatch(
+            source: .user,
+            index: 0,
+            prefix: "com.example.coder",
+            delegate: .workflow(workflowId: "wf-test")
+        )
+        let routing = LLMRefiner.makeRoutingTelemetry(
+            match: match,
+            decision: .workflow(wf)
+        )
+        XCTAssertEqual(routing?.dispatchedTo, "workflow:wf-test")
+    }
+
+    func testMakeRoutingTelemetry_WorkflowMissingEncodesMissingTag() {
+        let match = ToneMatch(
+            source: .defaultRule,
+            index: 5,
+            prefix: "com.example.x",
+            delegate: .workflow(workflowId: "wf-ghost")
+        )
+        let routing = LLMRefiner.makeRoutingTelemetry(
+            match: match,
+            decision: .workflowMissing(workflowId: "wf-ghost")
+        )
+        XCTAssertEqual(routing?.matchedSource, "default")
+        XCTAssertEqual(routing?.matchedIndex, 5)
+        XCTAssertEqual(routing?.dispatchedTo, "workflow-missing:wf-ghost")
+    }
 }

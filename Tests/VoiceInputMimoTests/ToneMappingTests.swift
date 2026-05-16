@@ -155,4 +155,58 @@ final class ToneMappingTests: XCTestCase {
             ToneDelegate.workflow(workflowId: "wf-1")
         )
     }
+
+    // MARK: - resolveWithMatch (telemetry-aware)
+
+    func testResolveWithMatch_UserRuleWinsOverDefault() {
+        let userRules: [ToneRule] = [
+            .init(bundleIDPrefix: "com.apple.mail", delegated: .claudeCode),
+        ]
+        let ctx = CapturedContext(bundleID: "com.apple.mail", appName: "Mail")
+        let match = ToneMapping.resolveWithMatch(context: ctx, userRules: userRules)
+        XCTAssertEqual(match.source, .user)
+        XCTAssertEqual(match.index, 0)
+        XCTAssertEqual(match.prefix, "com.apple.mail")
+        XCTAssertEqual(match.delegate, .mode(.claudeCode))
+    }
+
+    func testResolveWithMatch_FallsThroughToDefaultWhenNoUserMatch() {
+        let userRules: [ToneRule] = [
+            .init(bundleIDPrefix: "com.example.other", delegated: .structure),
+        ]
+        let ctx = CapturedContext(bundleID: "com.apple.mail", appName: "Mail")
+        let match = ToneMapping.resolveWithMatch(context: ctx, userRules: userRules)
+        XCTAssertEqual(match.source, .defaultRule)
+        // com.apple.mail is the 0th entry in defaultRules.
+        XCTAssertEqual(match.index, 0)
+        XCTAssertEqual(match.prefix, "com.apple.mail")
+        XCTAssertEqual(match.delegate, .mode(.refine))
+    }
+
+    func testResolveWithMatch_FallbackWhenNeitherTableMatches() {
+        let ctx = CapturedContext(bundleID: "com.example.unknown", appName: "Unknown")
+        let match = ToneMapping.resolveWithMatch(context: ctx, userRules: [])
+        XCTAssertEqual(match.source, .fallback)
+        XCTAssertNil(match.index)
+        XCTAssertNil(match.prefix)
+        XCTAssertEqual(match.delegate, .mode(.refine))
+    }
+
+    func testResolveWithMatch_PreservesIndexInUserTable() {
+        let userRules: [ToneRule] = [
+            .init(bundleIDPrefix: "com.example.a", delegated: .refine),
+            .init(bundleIDPrefix: "com.example.b", delegated: .refine),
+            .init(bundleIDPrefix: "com.example.c", delegated: .structure),
+        ]
+        let ctx = CapturedContext(bundleID: "com.example.c", appName: nil)
+        let match = ToneMapping.resolveWithMatch(context: ctx, userRules: userRules, defaultRules: [])
+        XCTAssertEqual(match.source, .user)
+        XCTAssertEqual(match.index, 2)
+        XCTAssertEqual(match.delegate, .mode(.structure))
+    }
+
+    func testResolveWithMatch_EmptyContextHitsFallback() {
+        let match = ToneMapping.resolveWithMatch(context: .empty, userRules: [])
+        XCTAssertEqual(match.source, .fallback)
+    }
 }

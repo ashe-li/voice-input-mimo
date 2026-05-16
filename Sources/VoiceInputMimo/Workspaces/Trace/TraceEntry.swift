@@ -39,8 +39,32 @@ struct TraceEntry: Codable, Identifiable, Equatable, Hashable {
     /// trace, keyed by the archive entry's ISO8601 timestamp.
     var clipboardTimestamp: String?
 
-    /// Tag for cross-cutting filters in the UI (e.g. mode used).
+    /// Tag for cross-cutting filters in the UI (e.g. mode used). For
+    /// `.contextAware` input this holds the **resolved** mode (refine /
+    /// claudeCode / structure) — read `inputMode` to see what the user
+    /// originally selected.
     var mode: String?
+
+    /// User-selected input mode at the moment refine() was called.
+    /// `"contextAware"` means dispatch ran the context-aware routing;
+    /// `.mode` field then holds the resolved concrete mode. Optional so
+    /// pre-enhancement traces decode unchanged.
+    var inputMode: String?
+
+    /// Frontmost-app bundle ID captured at hotkey-down (not refine-time —
+    /// see `AppDelegate.contextAtKeyDown`). Lets you cross-reference which
+    /// app you were in vs which mode/workflow was picked.
+    var contextBundleID: String?
+
+    /// Display name of the frontmost app at hotkey-down. Same provenance as
+    /// `contextBundleID`; redundant but spares analysis tools a bundleID-
+    /// to-name lookup.
+    var contextAppName: String?
+
+    /// Routing breakdown for `.contextAware` dispatch — which rule matched
+    /// (or fallback), what it delegated to. Nil for non-contextAware modes
+    /// and for pre-enhancement traces.
+    var routing: Routing?
 
     init(
         id: String = "trace-\(UUID().uuidString.prefix(8))",
@@ -54,7 +78,11 @@ struct TraceEntry: Codable, Identifiable, Equatable, Hashable {
         finalText: String? = nil,
         logEntries: [LogEntry] = [],
         clipboardTimestamp: String? = nil,
-        mode: String? = nil
+        mode: String? = nil,
+        inputMode: String? = nil,
+        contextBundleID: String? = nil,
+        contextAppName: String? = nil,
+        routing: Routing? = nil
     ) {
         self.id = id
         self.startedAt = startedAt
@@ -68,6 +96,44 @@ struct TraceEntry: Codable, Identifiable, Equatable, Hashable {
         self.logEntries = logEntries
         self.clipboardTimestamp = clipboardTimestamp
         self.mode = mode
+        self.inputMode = inputMode
+        self.contextBundleID = contextBundleID
+        self.contextAppName = contextAppName
+        self.routing = routing
+    }
+
+    /// Routing decision for `.contextAware` dispatch. Captured so post-hoc
+    /// analysis can answer "why was mode X picked for app Y" — without this
+    /// you only see the final `mode` and have to re-run resolve() against
+    /// stale rules to guess.
+    struct Routing: Codable, Equatable, Hashable {
+        /// Prefix tags for `dispatchedTo`. Exposed as static constants so
+        /// `LLMRefiner.makeRoutingTelemetry` and downstream jq-style
+        /// queries reference the same source of truth instead of
+        /// duplicating literal strings.
+        static let modePrefix = "mode:"
+        static let workflowPrefix = "workflow:"
+        static let workflowMissingPrefix = "workflow-missing:"
+
+        /// Which rule table the match came from.
+        /// - `"user"`: matched a user-defined rule (highest precedence)
+        /// - `"default"`: matched a shipped default rule
+        /// - `"fallback"`: no rule matched, fell back to `.mode(.refine)`
+        let matchedSource: String
+
+        /// Index within the matched table. Nil for `"fallback"` since no rule
+        /// matched.
+        let matchedIndex: Int?
+
+        /// The `bundleIDPrefix` of the matched rule. Nil for `"fallback"`.
+        let matchedPrefix: String?
+
+        /// Dispatch target encoded as `"mode:<refine|claudeCode|structure>"`
+        /// or `"workflow:<id>"` or `"workflow-missing:<id>"`. String form so
+        /// the JSON stays human-greppable and survives schema changes to
+        /// `RefineMode` / `Workflow.id`. Constructed via the `*Prefix`
+        /// constants above to avoid string-literal drift.
+        let dispatchedTo: String
     }
 
     struct LogEntry: Codable, Equatable, Hashable {

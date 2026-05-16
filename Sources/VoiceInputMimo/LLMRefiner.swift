@@ -135,7 +135,7 @@ final class LLMRefiner {
     func refine(_ text: String, requestId: String = "", mode: RefineMode? = nil, force: Bool = false,
                 completion: @escaping (Result<String, Error>) -> Void) {
         refine(text, requestId: requestId, mode: mode, force: force,
-               capturedContext: nil, completion: completion)
+               capturedContext: nil, routingCallback: nil, completion: completion)
     }
 
     /// Recording-path entry point. `capturedContext` is the frontmost-app
@@ -143,8 +143,15 @@ final class LLMRefiner {
     /// non-nil, `.contextAware` dispatch routes via that bundle ID instead
     /// of re-capturing at refine() time (which would observe the wrong
     /// frontmost after ASR latency / focus changes).
+    ///
+    /// `routingCallback` is invoked synchronously after dispatch is decided
+    /// (before LLM/workflow execution). Carries `(inputMode, routing)` so
+    /// the caller can persist routing telemetry without LLMRefiner taking
+    /// a hard dependency on RecordingTracer. `routing` is nil for non-
+    /// `.contextAware` input modes — they bypass ToneMapping.
     func refine(_ text: String, requestId: String = "", mode: RefineMode? = nil, force: Bool = false,
                 capturedContext: CapturedContext?,
+                routingCallback: ((_ inputMode: RefineMode, _ routing: TraceEntry.Routing?) -> Void)? = nil,
                 completion: @escaping (Result<String, Error>) -> Void) {
         guard force || (isEnabled && isConfigured) else {
             completion(.success(text))
@@ -161,26 +168,35 @@ final class LLMRefiner {
         // bypasses the prompt-resolution / single LLM-call code below entirely
         // — it runs the chain via WorkflowExecutor and returns the chain's
         // final output via completion. Missing workflow falls back to refine.
+        // Capture the ToneMatch when routing through contextAware so we can
+        // emit telemetry — `decideDispatch` only needs the delegate but
+        // routingCallback wants the source/index/prefix too.
+        let toneMatch: ToneMatch? = rawMode == .contextAware
+            ? ToneMapping.resolveWithMatch(
+                // Prefer the context captured at hotkey-down time. By the
+                // time refine() runs, ASR has already finished and the
+                // user may have switched focus (or the HUD overlay may
+                // have stolen frontmost) — late capture would route to
+                // the wrong app's rule. fall back to a live capture only
+                // when callers don't pre-capture (e.g. tests, Settings
+                // "Test" button).
+                context: capturedContext ?? ContextCapture.capture(),
+                userRules: (try? ToneMappingStore.shared.loadAll()) ?? []
+            )
+            : nil
+
         let resolvedMode: RefineMode
-        switch Self.decideDispatch(
+        let dispatchDecision = Self.decideDispatch(
             rawMode: rawMode,
-            delegate: rawMode == .contextAware
-                ? ToneMapping.resolve(
-                    // Prefer the context captured at hotkey-down time. By the
-                    // time refine() runs, ASR has already finished and the
-                    // user may have switched focus (or the HUD overlay may
-                    // have stolen frontmost) — late capture would route to
-                    // the wrong app's rule. fall back to a live capture only
-                    // when callers don't pre-capture (e.g. tests, Settings
-                    // "Test" button).
-                    context: capturedContext ?? ContextCapture.capture(),
-                    rules: ToneMapping.effectiveRules(
-                        userRules: (try? ToneMappingStore.shared.loadAll()) ?? []
-                    )
-                )
-                : nil,
+            delegate: toneMatch?.delegate,
             findWorkflow: { try? WorkflowStore.shared.find(id: $0) }
-        ) {
+        )
+        // Emit routing telemetry before executing dispatch — caller persists
+        // even if the LLM call or workflow run subsequently fails.
+        if let routingCallback {
+            routingCallback(rawMode, Self.makeRoutingTelemetry(match: toneMatch, decision: dispatchDecision))
+        }
+        switch dispatchDecision {
         case .singleMode(let m):
             resolvedMode = m
         case .workflow(let workflow):
@@ -369,6 +385,35 @@ final class LLMRefiner {
             }
             return .workflowMissing(workflowId: id)
         }
+    }
+
+    /// Convert ToneMatch + DispatchDecision into the persisted Routing
+    /// shape. Returns nil for non-contextAware dispatch (no toneMatch) —
+    /// telemetry only makes sense when ToneMapping actually ran.
+    ///
+    /// `dispatchedTo` encodes the post-decideDispatch action; differs from
+    /// `match.delegate` when the matched workflow id wasn't found
+    /// (`.workflowMissing` path).
+    static func makeRoutingTelemetry(
+        match: ToneMatch?,
+        decision: DispatchDecision
+    ) -> TraceEntry.Routing? {
+        guard let match else { return nil }
+        let dispatchedTo: String
+        switch decision {
+        case .singleMode(let m):
+            dispatchedTo = TraceEntry.Routing.modePrefix + m.rawValue
+        case .workflow(let wf):
+            dispatchedTo = TraceEntry.Routing.workflowPrefix + wf.id
+        case .workflowMissing(let id):
+            dispatchedTo = TraceEntry.Routing.workflowMissingPrefix + id
+        }
+        return TraceEntry.Routing(
+            matchedSource: match.source.rawValue,
+            matchedIndex: match.index,
+            matchedPrefix: match.prefix,
+            dispatchedTo: dispatchedTo
+        )
     }
 
     static func gatewayMode(for refineMode: RefineMode) -> String {

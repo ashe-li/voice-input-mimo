@@ -12,7 +12,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var isEnabled = true
     private var isRecording = false
-    /// Set during a Ctrl+Option+R recording — gates the post-ASR
+    /// Set during a Ctrl+Cmd+R recording — gates the post-ASR
     /// pipeline to skip LLM + paste and route to a park trace instead.
     private var isParkMode = false
 
@@ -290,6 +290,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // intent is captured at the moment of press, not at ASR-completion).
         contextAtKeyDown = ContextCapture.capture()
         tracer.begin()
+        tracer.recordContext(
+            bundleID: contextAtKeyDown?.bundleID,
+            appName: contextAtKeyDown?.appName
+        )
 
         updateStatusIcon(recording: true)
         overlayPanel.transition(to: .recording(elapsed: 0))
@@ -414,7 +418,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             refiner.refine(
                 trimmed,
                 requestId: requestId,
-                capturedContext: contextAtKeyDown
+                capturedContext: contextAtKeyDown,
+                routingCallback: { [weak self] inputMode, routing in
+                    // Persist routing telemetry on the trace before LLM/
+                    // workflow execution — even if the call subsequently
+                    // fails we still want to see which mode was picked.
+                    //
+                    // refine() invokes this callback synchronously on the
+                    // ASR completion thread (background). Bounce to main
+                    // so RecordingTracer's lock + UI-side reads of
+                    // currentTrace stay consistent with the other record*
+                    // calls that run on main.
+                    DispatchQueue.main.async {
+                        self?.tracer.recordRouting(inputMode: inputMode.rawValue, routing: routing)
+                    }
+                }
             ) { [weak self] result in
                 guard let self else { return }
                 self.logLatency("refine")
@@ -827,7 +845,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshOutputModeMenu()
     }
 
-    /// Output mode in the order used by the Ctrl+Option+arrow cycle hotkey.
+    /// Output mode in the order used by the Ctrl+Cmd+arrow cycle hotkey.
     /// Matches the menu-bar reading order (top→bottom) so users build a
     /// consistent mental model: → moves "down the menu", ← moves "up".
     private enum OutputModeChoice: CaseIterable {
@@ -864,7 +882,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let current = currentOutputModeChoice()
         let idx = order.firstIndex(of: current) ?? 0
         let nextIdx = ((idx + direction) % order.count + order.count) % order.count
-        applyOutputModeChoice(order[nextIdx])
+        let next = order[nextIdx]
+        applyOutputModeChoice(next)
+        // Surface the new mode as a transient HUD toast so the user gets
+        // visual feedback without looking up at the menubar. Same label
+        // string the menubar item uses, kept in sync via outputModeLabel(_:).
+        overlayPanel.transition(to: .modeIndicator(label: outputModeLabel(for: next)))
+    }
+
+    /// Display label for a given output mode. Single source of truth used
+    /// by both the menubar item title and the cycle-hotkey HUD toast.
+    private func outputModeLabel(for choice: OutputModeChoice) -> String {
+        switch choice {
+        case .raw: return "輸出模式：中文 ASR"
+        case .refine: return "輸出模式：中文修正"
+        case .claudeCode: return "輸出模式：英文翻譯"
+        case .structure: return "輸出模式：複合情境"
+        case .contextAware: return "輸出模式：自動辨識"
+        }
     }
 
     /// Bridged through `MainActor.assumeIsolated` because the Phase enum is
@@ -890,13 +925,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         structureOutputMenuItem.state = (choice == .structure) ? .on : .off
         contextAwareOutputMenuItem.state = (choice == .contextAware) ? .on : .off
 
-        switch choice {
-        case .raw: outputModeMenuItem.title = "輸出模式：中文 ASR"
-        case .refine: outputModeMenuItem.title = "輸出模式：中文修正"
-        case .claudeCode: outputModeMenuItem.title = "輸出模式：英文翻譯"
-        case .structure: outputModeMenuItem.title = "輸出模式：複合情境"
-        case .contextAware: outputModeMenuItem.title = "輸出模式：自動辨識"
-        }
+        outputModeMenuItem.title = outputModeLabel(for: choice)
     }
 
     /// Host the SwiftUI `OverlayContentSwiftUI` view inside an NSHostingView,

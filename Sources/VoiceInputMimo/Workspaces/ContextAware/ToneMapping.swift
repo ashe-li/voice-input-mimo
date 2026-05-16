@@ -97,17 +97,65 @@ enum ToneMapping {
     /// Resolve a captured context to a delegate. Falls back to `.mode(.refine)`
     /// when no rule matches (safest default — does cleanup, doesn't translate,
     /// doesn't trigger router or workflow).
+    ///
+    /// Thin wrapper over `resolveWithMatch` for callers that don't need the
+    /// match provenance (tests, legacy paths). The `rules:` parameter is
+    /// treated as the default-rules table — first-match-wins semantics are
+    /// preserved, but the resulting `ToneMatch.source` would always be
+    /// `.defaultRule` if exposed. Use `resolveWithMatch` directly when you
+    /// need to distinguish user vs default precedence.
     static func resolve(context: CapturedContext, rules: [ToneRule] = defaultRules) -> ToneDelegate {
-        for rule in rules where rule.matches(context.bundleID) {
-            return rule.delegated
+        resolveWithMatch(context: context, userRules: [], defaultRules: rules).delegate
+    }
+
+    /// Resolve + report which rule matched. Splits user vs default rule
+    /// tables so the caller knows the match provenance for telemetry —
+    /// `effectiveRules()` concatenates them, but the resulting index is
+    /// ambiguous (user-or-default depending on userRules count). This
+    /// variant keeps the two tables separate and returns a `ToneMatch`
+    /// with the source tag.
+    ///
+    /// First-match precedence: scans `userRules` first, then `defaultRules`.
+    /// `.fallback` is returned only when both tables miss.
+    static func resolveWithMatch(
+        context: CapturedContext,
+        userRules: [ToneRule],
+        defaultRules: [ToneRule] = defaultRules
+    ) -> ToneMatch {
+        for (idx, rule) in userRules.enumerated() where rule.matches(context.bundleID) {
+            return ToneMatch(source: .user, index: idx, prefix: rule.bundleIDPrefix, delegate: rule.delegated)
         }
-        return .mode(.refine)
+        for (idx, rule) in defaultRules.enumerated() where rule.matches(context.bundleID) {
+            return ToneMatch(source: .defaultRule, index: idx, prefix: rule.bundleIDPrefix, delegate: rule.delegated)
+        }
+        return ToneMatch(source: .fallback, index: nil, prefix: nil, delegate: .mode(.refine))
     }
 
     /// Effective rule list = user rules first (highest precedence — first-match
     /// wins), then default rules as fallback. User adds / overrides without
     /// losing the shipped table.
+    ///
+    /// Retained for callers that want a flat list (e.g. `resolve()`). For
+    /// routing telemetry use `resolveWithMatch` which preserves the source
+    /// tag.
     static func effectiveRules(userRules: [ToneRule]) -> [ToneRule] {
         userRules + defaultRules
     }
+}
+
+/// Match result from `ToneMapping.resolveWithMatch` — carries both the
+/// delegate (what to dispatch to) and provenance (which table, which row).
+/// Provenance feeds `TraceEntry.Routing` so post-hoc analysis can answer
+/// "did the user rule fire or did default catch this?".
+struct ToneMatch: Equatable, Sendable {
+    enum Source: String, Equatable, Sendable {
+        case user                          // matched user-defined rule (highest precedence)
+        case defaultRule = "default"       // matched shipped default rule — JSON-friendly raw value
+        case fallback                      // no rule matched, falling back to .mode(.refine)
+    }
+
+    let source: Source
+    let index: Int?         // nil for .fallback
+    let prefix: String?     // nil for .fallback
+    let delegate: ToneDelegate
 }

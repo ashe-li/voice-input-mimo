@@ -18,26 +18,26 @@ struct AboutPane: View {
     var body: some View {
         Form {
             Section {
-                LabeledContent("Version", value: appVersion)
+                LabeledContent("版本", value: appVersion)
                 LabeledContent("Bundle ID", value: Bundle.main.bundleIdentifier ?? "?")
                 LabeledContent("Application Support", value: promptsRoot)
             } header: {
-                SectionHeading("About VoiceInputMimo", subtitle: "macOS LSUIElement menubar app")
+                SectionHeading("關於 VoiceInputMimo", subtitle: "macOS LSUIElement menubar app")
             }
 
             Section {
-                Text("VoiceInputMimo uses **MiMo-V2.5-ASR** (Xiaomi, MIT) for code-switching speech recognition and a local OpenAI-compatible LLM (Rapid-MLX by default) for cleanup / English translation.")
+                Text("VoiceInputMimo 使用 **MiMo-V2.5-ASR**（Xiaomi, MIT）做中英混說語音辨識，並透過本地 OpenAI 相容 LLM（預設 Rapid-MLX）做清理 / 英文翻譯。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
-                Text("Prompts and skills live as JSON in Application Support — safe to copy, share, or version-control.")
+                Text("Prompt 與 Skill 以 JSON 存在 Application Support — 可自由複製、分享、版本控管。")
                     .font(.callout)
                     .foregroundStyle(.secondary)
             } header: {
-                SectionHeading("Tech")
+                SectionHeading("技術")
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("About")
+        .navigationTitle("關於")
     }
 }
 

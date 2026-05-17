@@ -20,7 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private var isEnabled = true
     private var isRecording = false
-    /// Set during a Ctrl+Option+R recording — gates the post-ASR
+    /// Set during a Ctrl+Cmd+R recording — gates the post-ASR
     /// pipeline to skip LLM + paste and route to a park trace instead.
     /// Captured per-job at `fnUp`; not consulted afterwards.
     private var isParkMode = false
@@ -42,6 +42,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var phaseTimer: Timer?
     private var phaseStart: Date?
     private var phaseBuilder: ((Double) -> OverlayPanel.Phase)?
+
+    // Snapshot of the frontmost-app context captured at the moment the
+    // recording hotkey is pressed. Used for `.contextAware` dispatch instead
+    // of late-capturing inside `LLMRefiner.refine`. By the time refine() runs,
+    // ASR has already completed and the user may have switched focus — late
+    // capture would route to the wrong app's tone-mapping rule (Mode 4
+    // misjudgment). Passed into the RecordingJob at fnUp so the JobRunner
+    // can forward it through `LLMRefiner.refine`'s capturedContext parameter
+    // even when the job is preempted and resumed.
+    private var contextAtKeyDown: CapturedContext?
 
     // Latency instrumentation — set on fnUp entry, read by logLatency() to emit
     // `[Latency] fnUp +<marker>: <ms>ms` lines at each pipeline stage. Used to
@@ -283,8 +293,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         jobQueue.interruptForNewSegment()
 
         isRecording = true
+        // Snapshot frontmost BEFORE any UI work that might steal focus (HUD
+        // is a non-activating panel, but be defensive — and the user's
+        // intent is captured at the moment of press, not at ASR-completion).
+        contextAtKeyDown = ContextCapture.capture()
         let tracer = RecordingTracer()
         tracer.begin()
+        tracer.recordContext(
+            bundleID: contextAtKeyDown?.bundleID,
+            appName: contextAtKeyDown?.appName
+        )
         pendingTracer = tracer
         recordingStartTime = CFAbsoluteTimeGetCurrent()
 
@@ -336,10 +354,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             wavURL: wavURL,
             audioDurationSeconds: duration,
             tracer: tracer,
-            isPark: isParkMode
+            isPark: isParkMode,
+            capturedContext: contextAtKeyDown
         )
-        // park flag now owned by the job; reset the ivar before the next fnDown.
+        // park flag now owned by the job; reset both ivars before the next
+        // fnDown so a subsequent recording starts with clean state and a
+        // freshly-captured context.
         isParkMode = false
+        contextAtKeyDown = nil
 
         // The queue drives ASR → LLM → paste/saveSession via JobRunner
         // callbacks. enqueueHead means this new segment runs first; any
@@ -719,7 +741,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         refreshOutputModeMenu()
     }
 
-    /// Output mode in the order used by the Ctrl+Option+arrow cycle hotkey.
+    /// Output mode in the order used by the Ctrl+Cmd+arrow cycle hotkey.
     /// Matches the menu-bar reading order (top→bottom) so users build a
     /// consistent mental model: → moves "down the menu", ← moves "up".
     private enum OutputModeChoice: CaseIterable {
@@ -756,7 +778,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let current = currentOutputModeChoice()
         let idx = order.firstIndex(of: current) ?? 0
         let nextIdx = ((idx + direction) % order.count + order.count) % order.count
-        applyOutputModeChoice(order[nextIdx])
+        let next = order[nextIdx]
+        applyOutputModeChoice(next)
+        // Surface the new mode as a transient HUD toast so the user gets
+        // visual feedback without looking up at the menubar. Same label
+        // string the menubar item uses, kept in sync via outputModeLabel(_:).
+        overlayPanel.transition(to: .modeIndicator(label: outputModeLabel(for: next)))
+    }
+
+    /// Display label for a given output mode. Single source of truth used
+    /// by both the menubar item title and the cycle-hotkey HUD toast.
+    private func outputModeLabel(for choice: OutputModeChoice) -> String {
+        switch choice {
+        case .raw: return "輸出模式：中文 ASR"
+        case .refine: return "輸出模式：中文修正"
+        case .claudeCode: return "輸出模式：英文翻譯"
+        case .structure: return "輸出模式：複合情境"
+        case .contextAware: return "輸出模式：自動辨識"
+        }
     }
 
     /// Bridged through `MainActor.assumeIsolated` because the Phase enum is
@@ -782,13 +821,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         structureOutputMenuItem.state = (choice == .structure) ? .on : .off
         contextAwareOutputMenuItem.state = (choice == .contextAware) ? .on : .off
 
-        switch choice {
-        case .raw: outputModeMenuItem.title = "輸出模式：中文 ASR"
-        case .refine: outputModeMenuItem.title = "輸出模式：中文修正"
-        case .claudeCode: outputModeMenuItem.title = "輸出模式：英文翻譯"
-        case .structure: outputModeMenuItem.title = "輸出模式：複合情境"
-        case .contextAware: outputModeMenuItem.title = "輸出模式：自動辨識"
-        }
+        outputModeMenuItem.title = outputModeLabel(for: choice)
     }
 
     /// Host the SwiftUI `OverlayContentSwiftUI` view inside an NSHostingView,
@@ -1132,7 +1165,26 @@ extension AppDelegate: JobRunner {
         }
 
         let requestId = job.wavURL.deletingPathExtension().lastPathComponent
-        refiner.refine(asr, requestId: requestId) { [weak self] result in
+        refiner.refine(
+            asr,
+            requestId: requestId,
+            capturedContext: job.capturedContext,
+            routingCallback: { [weak job] inputMode, routing in
+                // Persist routing telemetry on the trace before LLM /
+                // workflow execution — even if the call subsequently fails
+                // we still want to see which mode was picked. refine()
+                // invokes this synchronously on the ASR completion thread
+                // (background); bounce to main so the tracer's lock + UI
+                // reads of currentTrace stay consistent with other record*
+                // calls.
+                DispatchQueue.main.async {
+                    job?.tracer.recordRouting(
+                        inputMode: inputMode.rawValue,
+                        routing: routing
+                    )
+                }
+            }
+        ) { [weak self] result in
             self?.logLatency("refine")
             self?.stopPhaseTimer()
             switch result {

@@ -12,8 +12,8 @@ struct GlossaryPane: View {
     var body: some View {
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                SectionHeading("Glossary",
-                               subtitle: "Proper nouns the LLM should preserve verbatim")
+                SectionHeading("詞彙表",
+                               subtitle: "LLM 應原樣保留的專有名詞")
                 Spacer()
                 if let banner = model.banner {
                     Text(banner)
@@ -21,8 +21,8 @@ struct GlossaryPane: View {
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
-                Button("Import…") { runImport() }
-                Button("Export…") { runExport() }
+                Button("匯入…") { runImport() }
+                Button("匯出…") { runExport() }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -50,7 +50,7 @@ struct GlossaryPane: View {
                 },
                 onAdd: { model.addBlank() },
                 onDelete: { id in model.delete(id: id) },
-                searchPrompt: "Search terms",
+                searchPrompt: "搜尋詞彙",
                 searchMatch: { entry, query in
                     entry.spoken.localizedCaseInsensitiveContains(query)
                         || entry.canonical.localizedCaseInsensitiveContains(query)
@@ -58,7 +58,7 @@ struct GlossaryPane: View {
                 }
             )
         }
-        .navigationTitle("Glossary")
+        .navigationTitle("詞彙表")
         .task { model.reload() }
     }
 
@@ -72,10 +72,10 @@ struct GlossaryPane: View {
                 model.entries,
                 suggestedName: "glossary-\(stamp).json"
             ) {
-                model.banner = "Exported \(model.entries.count) terms to \(url.lastPathComponent)"
+                model.banner = "已匯出 \(model.entries.count) 條詞彙至 \(url.lastPathComponent)"
             }
         } catch {
-            model.banner = "Export failed: \(error.localizedDescription)"
+            model.banner = "匯出失敗：\(error.localizedDescription)"
         }
     }
 
@@ -84,7 +84,7 @@ struct GlossaryPane: View {
             guard let incoming = try GlossaryImportExportAdapter.importEntries() else { return }
             model.applyImport(incoming)
         } catch {
-            model.banner = "Import failed: \(error.localizedDescription)"
+            model.banner = "匯入失敗：\(error.localizedDescription)"
         }
     }
 }
@@ -97,7 +97,7 @@ private struct GlossaryRow: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             HStack(spacing: 4) {
-                Text(entry.spoken.isEmpty ? "(empty)" : entry.spoken)
+                Text(entry.spoken.isEmpty ? "（未填）" : entry.spoken)
                     .font(.callout)
                     .foregroundStyle(entry.spoken.isEmpty ? .secondary : .primary)
                 if !entry.canonical.isEmpty, entry.canonical != entry.spoken {
@@ -125,15 +125,15 @@ private struct GlossaryDetail: View {
         if let entry {
             Form {
                 Section {
-                    TextField("Spoken (講出來的形式)", text: Binding(
+                    TextField("Spoken（講出來的形式）", text: Binding(
                         get: { entry.spoken },
                         set: { v in var c = entry; c.spoken = v; onChange(c) }
                     ))
-                    TextField("Canonical (正字 / 正確寫法)", text: Binding(
+                    TextField("Canonical（正字 / 正確寫法）", text: Binding(
                         get: { entry.canonical },
                         set: { v in var c = entry; c.canonical = v; onChange(c) }
                     ))
-                    TextField("Context (觸發場景，可選)", text: Binding(
+                    TextField("Context（觸發場景，選填）", text: Binding(
                         get: { entry.context },
                         set: { v in var c = entry; c.context = v; onChange(c) }
                     ))
@@ -149,7 +149,7 @@ private struct GlossaryDetail: View {
                 Image(systemName: "character.book.closed")
                     .font(.system(size: 32))
                     .foregroundStyle(.tertiary)
-                Text("Select a term, or click + to add a new one")
+                Text("選擇一條詞彙，或按 + 新增一條")
                     .foregroundStyle(.secondary)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -162,7 +162,7 @@ private struct GlossaryPreview: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Injected prompt fragment")
+            Text("注入到 prompt 的片段")
                 .font(.caption)
                 .foregroundStyle(.secondary)
 

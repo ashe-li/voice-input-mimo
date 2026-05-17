@@ -29,6 +29,13 @@ final class RecordingJob {
     /// the ASR transcript but skips LLM refine and paste injection — the user
     /// retrieves the captured text later from history.
     let isPark: Bool
+    /// Frontmost-app context captured at the moment fnDown fired. Carried on
+    /// the job (not on AppDelegate) so a preempted-and-resumed job still
+    /// dispatches against the right Mode 4 / contextAware routing target —
+    /// late-capturing inside the runner would route to whatever app is
+    /// frontmost by the time ASR completes, which can differ from the user's
+    /// actual intent at press time.
+    let capturedContext: CapturedContext?
 
     private(set) var stage: Stage
     private(set) var cancelled: Bool
@@ -38,6 +45,7 @@ final class RecordingJob {
         audioDurationSeconds: Double,
         tracer: RecordingTracer,
         isPark: Bool = false,
+        capturedContext: CapturedContext? = nil,
         id: UUID = UUID()
     ) {
         self.id = id
@@ -45,6 +53,7 @@ final class RecordingJob {
         self.audioDurationSeconds = audioDurationSeconds
         self.tracer = tracer
         self.isPark = isPark
+        self.capturedContext = capturedContext
         self.stage = .pendingASR
         self.cancelled = false
     }

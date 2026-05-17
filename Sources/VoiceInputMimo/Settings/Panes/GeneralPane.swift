@@ -18,7 +18,7 @@ struct GeneralPane: View {
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
             } header: {
-                SectionHeading("Text Refinement", subtitle: "Local LLM cleanup + optional English translation")
+                SectionHeading("文字後處理", subtitle: "本地 LLM 清理＋可選英文翻譯")
             }
 
             Section {
@@ -26,7 +26,7 @@ struct GeneralPane: View {
                     TextField("http://127.0.0.1:4000/v1", text: $vm.llmBaseURL)
                         .textFieldStyle(.roundedBorder)
                 }
-                LabeledContent("API Key (optional)") {
+                LabeledContent("API Key（選填）") {
                     TextField("local-api-key", text: $vm.llmAPIKey)
                         .textFieldStyle(.roundedBorder)
                 }
@@ -34,7 +34,7 @@ struct GeneralPane: View {
                     TextField("model-id", text: $vm.llmModel)
                         .textFieldStyle(.roundedBorder)
                 }
-                LabeledContent("Reply Suffix") {
+                LabeledContent("回覆後綴") {
                     TextEditor(text: $vm.llmSuffix)
                         .font(.system(size: 12, weight: .regular, design: .default))
                         .frame(minHeight: 100)
@@ -48,22 +48,22 @@ struct GeneralPane: View {
             Section {
                 HStack {
                     StatusLineView(status: vm.llmProbeStatus)
-                    Button("Probe LLM") { vm.probeLLM() }
-                    Button("Reset Suffix") { vm.resetSuffix() }
+                    Button("測試連線") { vm.probeLLM() }
+                    Button("重設後綴") { vm.resetSuffix() }
                 }
             }
 
             Section {
                 HStack {
                     StatusLineView(status: vm.generalStatus)
-                    Button("Test (sample text)") { vm.test() }
-                    Button("Save") { vm.save() }
+                    Button("測試（樣本文字）") { vm.test() }
+                    Button("儲存") { vm.save() }
                         .keyboardShortcut(.defaultAction)
                 }
             }
         }
         .formStyle(.grouped)
-        .navigationTitle("General")
+        .navigationTitle("一般")
     }
 }
 

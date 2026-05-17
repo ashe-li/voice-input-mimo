@@ -18,17 +18,17 @@ struct PromptsPane: View {
 
         VStack(spacing: 0) {
             HStack(spacing: 12) {
-                Picker("View", selection: $pane.paneMode) {
-                    Text("Profiles").tag(PromptsPaneMode.profiles)
-                    Text("Skills").tag(PromptsPaneMode.skills)
+                Picker("檢視", selection: $pane.paneMode) {
+                    Text("Profile").tag(PromptsPaneMode.profiles)
+                    Text("Skill").tag(PromptsPaneMode.skills)
                 }
                 .pickerStyle(.segmented)
                 .frame(maxWidth: 240)
 
                 Spacer()
 
-                Button("Import…") { runImport() }
-                Button("Export…") { runExport() }
+                Button("匯入…") { runImport() }
+                Button("匯出…") { runExport() }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 8)
@@ -52,7 +52,7 @@ struct PromptsPane: View {
             }
         }
         .environment(pane)
-        .navigationTitle("Prompts")
+        .navigationTitle("Prompt")
         .task {
             await store.reload()
             pane.ensureSelection(from: store)
@@ -102,10 +102,10 @@ struct PromptsPane: View {
                 bundle,
                 suggestedName: "prompts-\(timestamp).json"
             ) {
-                importBanner = "Exported \(bundle.profiles.count) profiles and \(bundle.skills.count) skills to \(url.lastPathComponent)"
+                importBanner = "已匯出 \(bundle.profiles.count) 個 profile 與 \(bundle.skills.count) 個 skill 至 \(url.lastPathComponent)"
             }
         } catch {
-            importBanner = "Export failed: \(error.localizedDescription)"
+            importBanner = "匯出失敗：\(error.localizedDescription)"
         }
     }
 
@@ -125,12 +125,12 @@ struct PromptsPane: View {
             Task {
                 await store.applyImport(profiles: plan.profiles, skills: plan.skills)
                 let r = plan.result
-                importBanner = "Imported — profiles: +\(r.profilesAdded) renamed:\(r.profilesRenamed) skipped:\(r.profilesSkipped); skills: +\(r.skillsAdded) renamed:\(r.skillsRenamed) skipped:\(r.skillsSkipped)"
+                importBanner = "已匯入 — profile：+\(r.profilesAdded) 改名:\(r.profilesRenamed) 略過:\(r.profilesSkipped)；skill：+\(r.skillsAdded) 改名:\(r.skillsRenamed) 略過:\(r.skillsSkipped)"
                 pane.ensureSelection(from: store)
                 pane.ensureSkillSelection(from: store)
             }
         } catch {
-            importBanner = "Import failed: \(error.localizedDescription)"
+            importBanner = "匯入失敗：\(error.localizedDescription)"
         }
     }
 }

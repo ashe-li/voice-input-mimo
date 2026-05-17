@@ -54,7 +54,80 @@ final class RecordingTracerTests: XCTestCase {
         tracer.recordLLM("nope")
         tracer.recordFinal("nope")
         tracer.recordError("nope")
+        tracer.recordContext(bundleID: "nope", appName: "nope")
+        tracer.recordRouting(inputMode: "nope", routing: nil)
         XCTAssertNil(tracer.currentTrace)
+    }
+
+    // MARK: - Telemetry (recordContext / recordRouting)
+
+    func testRecordContextStampsBundleAndAppName() {
+        let tracer = makeTracer()
+        tracer.begin()
+        tracer.recordContext(bundleID: "com.apple.mail", appName: "Mail")
+        XCTAssertEqual(tracer.currentTrace?.contextBundleID, "com.apple.mail")
+        XCTAssertEqual(tracer.currentTrace?.contextAppName, "Mail")
+    }
+
+    func testRecordContextWithNilBundleStoresNil() {
+        // Login window / no UI session — capture returns nil bundle. The
+        // tracer stores nil (the meaningful "no app frontmost" signal),
+        // it doesn't no-op on nil — the no-op guard only fires when no
+        // trace is active.
+        let tracer = makeTracer()
+        tracer.begin()
+        tracer.recordContext(bundleID: nil, appName: nil)
+        XCTAssertNil(tracer.currentTrace?.contextBundleID)
+        XCTAssertNil(tracer.currentTrace?.contextAppName)
+    }
+
+    func testRecordRoutingStoresInputModeAndRouting() {
+        let tracer = makeTracer()
+        tracer.begin()
+        let routing = TraceEntry.Routing(
+            matchedSource: "user",
+            matchedIndex: 0,
+            matchedPrefix: "com.apple.mail",
+            dispatchedTo: "mode:claudeCode"
+        )
+        tracer.recordRouting(inputMode: "contextAware", routing: routing)
+        XCTAssertEqual(tracer.currentTrace?.inputMode, "contextAware")
+        XCTAssertEqual(tracer.currentTrace?.routing, routing)
+    }
+
+    func testRecordRoutingWithNilRoutingForNonContextAwareMode() {
+        // Non-contextAware modes get routing=nil but inputMode set.
+        let tracer = makeTracer()
+        tracer.begin()
+        tracer.recordRouting(inputMode: "claudeCode", routing: nil)
+        XCTAssertEqual(tracer.currentTrace?.inputMode, "claudeCode")
+        XCTAssertNil(tracer.currentTrace?.routing)
+    }
+
+    func testTelemetryRoundTripsThroughFinalize() throws {
+        let tracer = makeTracer()
+        tracer.begin()
+        tracer.recordContext(bundleID: "com.apple.mail", appName: "Mail")
+        tracer.recordRouting(
+            inputMode: "contextAware",
+            routing: TraceEntry.Routing(
+                matchedSource: "default",
+                matchedIndex: 0,
+                matchedPrefix: "com.apple.mail",
+                dispatchedTo: "mode:refine"
+            )
+        )
+        tracer.recordASR("hi")
+        tracer.recordFinal("hi")
+        tracer.finalize()
+
+        let saved = try store.loadAll()
+        XCTAssertEqual(saved.count, 1)
+        XCTAssertEqual(saved.first?.contextBundleID, "com.apple.mail")
+        XCTAssertEqual(saved.first?.contextAppName, "Mail")
+        XCTAssertEqual(saved.first?.inputMode, "contextAware")
+        XCTAssertEqual(saved.first?.routing?.matchedSource, "default")
+        XCTAssertEqual(saved.first?.routing?.dispatchedTo, "mode:refine")
     }
 
     func testFinalizeWithoutBeginReturnsNil() throws {

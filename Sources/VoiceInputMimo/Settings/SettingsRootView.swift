@@ -14,20 +14,22 @@ struct SettingsRootView: View {
 
         NavigationSplitView {
             List(selection: $vm.selectedPane) {
-                SidebarSection(title: "General") {
+                SidebarSection(title: "一般") {
                     sidebarRow(.general)
                     sidebarRow(.shortcuts)
                 }
-                SidebarSection(title: "Voice") {
+                SidebarSection(title: "語音") {
                     sidebarRow(.speech)
                     sidebarRow(.asrServer)
                 }
-                SidebarSection(title: "Workspace") {
+                SidebarSection(title: "工作區") {
                     sidebarRow(.prompts)
                     sidebarRow(.glossary)
+                    sidebarRow(.workflows)
+                    sidebarRow(.toneMapping)
                     sidebarRow(.history)
                 }
-                SidebarSection(title: "Info") {
+                SidebarSection(title: "資訊") {
                     sidebarRow(.about)
                 }
             }
@@ -52,9 +54,11 @@ struct SettingsRootView: View {
         case .shortcuts: ShortcutsPane()
         case .speech:    SpeechPane()
         case .asrServer: ASRServerPane()
-        case .prompts:   PromptsPane()
-        case .glossary:  GlossaryPane()
-        case .history:   HistoryPane()
+        case .prompts:     PromptsPane()
+        case .glossary:    GlossaryPane()
+        case .workflows:   WorkflowsPane()
+        case .toneMapping: ToneMappingPane()
+        case .history:     HistoryPane()
         case .about:     AboutPane()
         }
     }

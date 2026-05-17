@@ -15,6 +15,11 @@ final class OverlayPanel: NSPanel {
         /// the same text in both rows.
         case bothReady(zh: String, en: String, translating: Bool)
         case error(String)
+        /// Transient toast shown right after the user cycles output mode via
+        /// Ctrl+Option+←/→. Pure status — no waveform animation, auto-dismisses
+        /// after ~1.2s. Replaces any current phase, so cycling rapidly just
+        /// updates the label.
+        case modeIndicator(label: String)
     }
 
     // MARK: - Layout constants
@@ -173,6 +178,9 @@ final class OverlayPanel: NSPanel {
         case .error(let message):
             presentSingle("Error: \(Self.preview(message))", animating: false)
             scheduleDismiss(after: 1.4)
+        case .modeIndicator(let label):
+            presentSingle(Self.preview(label), animating: false)
+            scheduleDismiss(after: 1.2)
         }
     }
 

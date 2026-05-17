@@ -225,6 +225,14 @@ final class LLMRefiner {
         }
 
         currentTask = URLSession.shared.dataTask(with: request) { data, _, error in
+            // Cancelled mid-flight: caller (RecordingJobQueue) will resume
+            // this job later. Don't fire completion — the JobRunner callback
+            // would stopPhaseTimer / mutate overlay state belonging to the
+            // new in-flight segment.
+            let nsErr = error as NSError?
+            if nsErr?.code == NSURLErrorCancelled {
+                return
+            }
             if let error {
                 logger.error("\(logTag)Network error: \(error.localizedDescription)")
                 DispatchQueue.main.async { completion(.failure(error)) }

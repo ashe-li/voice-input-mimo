@@ -8,12 +8,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let audioRecorder = AudioRecorder()
     private let textInjector = TextInjector()
     private lazy var overlayPanel = OverlayPanel()
-    private let tracer = RecordingTracer()
+    /// Per-recording tracer: built in `fnDown`, transferred to the `RecordingJob`
+    /// in `fnUp`. Storing per-job (rather than one shared instance) is required
+    /// for the double-tap-Fn requeue path — an interrupted earlier segment must
+    /// keep its own trace state while the newer segment runs first.
+    private var pendingTracer: RecordingTracer?
+    /// Job queue that serialises segments and resumes interrupted ones so
+    /// both segments end up in history when the user double-taps Fn.
+    private let jobQueue = RecordingJobQueue()
+    private var recordingStartTime: CFAbsoluteTime?
 
     private var isEnabled = true
     private var isRecording = false
     /// Set during a Ctrl+Option+R recording — gates the post-ASR
     /// pipeline to skip LLM + paste and route to a park trace instead.
+    /// Captured per-job at `fnUp`; not consulted afterwards.
     private var isParkMode = false
 
     private var enableMenuItem: NSMenuItem!
@@ -33,15 +42,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var phaseTimer: Timer?
     private var phaseStart: Date?
     private var phaseBuilder: ((Double) -> OverlayPanel.Phase)?
-
-    // Last-seen ZH transcript, kept across LLM refining so refining/bothReady phases
-    // can show the original text alongside the translated output.
-    private var currentZH: String = ""
-
-    // Cancellable "show .refining after holding ZH for 0.4 s" deferred work.
-    // If the LLM completes within 0.4 s we cancel this so the overlay isn't
-    // resurrected back to .refining after .bothReady.
-    private var refiningHoldWork: DispatchWorkItem?
 
     // Latency instrumentation — set on fnUp entry, read by logLatency() to emit
     // `[Latency] fnUp +<marker>: <ms>ms` lines at each pipeline stage. Used to
@@ -143,6 +143,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             showAccessibilityAlert()
         }
 
+        jobQueue.runner = self
+
         keyMonitor.onFnDown = { [weak self] in self?.fnDown() }
         keyMonitor.onFnUp = { [weak self] in self?.fnUp() }
         keyMonitor.onCycleNext = { [weak self] in self?.cycleOutputMode(direction: 1) }
@@ -167,6 +169,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // either adopt the running sidecar or finish spawn before we hit it.
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
             self?.warmUpASR()
+        }
+
+        // Auto-sync fixtures at launch if a destination is remembered.
+        // Delayed 5s to stagger I/O after warmup and let UI settle.
+        // No remembered destination → silently skip (user hasn't configured).
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.0) { [weak self] in
+            self?.runFixtureExport(silent: true)
         }
     }
 
@@ -266,11 +275,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func fnDown() {
         guard isEnabled, !isRecording else { return }
-        LLMRefiner.shared.cancel()
-        ASRClient.shared.cancel()
+        // Preempt any in-flight job. If the prior segment's recording was
+        // shorter than the noise threshold (default 1.5s) it's dropped;
+        // otherwise it's requeued at the tail so this new segment runs
+        // first and the earlier one resumes afterwards. Either way, the
+        // history-writing pipeline is no longer torn down here.
+        jobQueue.interruptForNewSegment()
+
         isRecording = true
-        currentZH = ""
+        let tracer = RecordingTracer()
         tracer.begin()
+        pendingTracer = tracer
+        recordingStartTime = CFAbsoluteTimeGetCurrent()
 
         updateStatusIcon(recording: true)
         overlayPanel.transition(to: .recording(elapsed: 0))
@@ -289,6 +305,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let wavURL = audioRecorder.stopRecording()
         logLatency("stopRec")
+
+        let duration: Double
+        if let start = recordingStartTime {
+            duration = CFAbsoluteTimeGetCurrent() - start
+        } else {
+            duration = 0
+        }
+        recordingStartTime = nil
+
+        // pendingTracer is set in fnDown — under normal flow it always exists.
+        // If it's nil here, fnUp fired without a matching fnDown (would be a
+        // KeyMonitor bug), so we bail without touching the queue.
+        guard let tracer = pendingTracer else {
+            isParkMode = false
+            return
+        }
+        pendingTracer = nil
+
         guard let wavURL else {
             overlayPanel.transition(to: .error("No audio captured"))
             tracer.recordError("No audio captured")
@@ -298,130 +332,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         tracer.recordAudio(path: wavURL.path)
 
-        // Stage 1: ASR via local-llm-backend gateway :4000 (was direct :8766 pre-cutover).
+        let job = RecordingJob(
+            wavURL: wavURL,
+            audioDurationSeconds: duration,
+            tracer: tracer,
+            isPark: isParkMode
+        )
+        // park flag now owned by the job; reset the ivar before the next fnDown.
+        isParkMode = false
+
+        // The queue drives ASR → LLM → paste/saveSession via JobRunner
+        // callbacks. enqueueHead means this new segment runs first; any
+        // requeued earlier segment (from interruptForNewSegment) resumes
+        // afterwards.
         overlayPanel.transition(to: .transcribing(elapsed: 0))
         startPhaseTimer { .transcribing(elapsed: $0) }
-        ASRClient.shared.transcribe(wavURL: wavURL) { [weak self] result in
-            guard let self else { return }
-            self.logLatency("ASR")
-            self.stopPhaseTimer()
-            switch result {
-            case .success(let asrResult):
-                self.handleTranscription(asrResult.text, requestId: asrResult.requestId)
-            case .failure(let error):
-                NSLog("[AppDelegate] ASR failed: %@", error.localizedDescription)
-                self.overlayPanel.transition(to: .error("ASR: \(error.localizedDescription)"))
-                self.tracer.recordError("ASR: \(error.localizedDescription)")
-                self.tracer.finalize()
-                self.isParkMode = false
-            }
-        }
-    }
-
-    private func handleTranscription(_ text: String, requestId: String) {
-        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            overlayPanel.transition(to: .error("No speech detected"))
-            tracer.recordError("No speech detected")
-            tracer.finalize()
-            isParkMode = false
-            return
-        }
-        currentZH = trimmed
-        tracer.recordASR(trimmed)
-
-        // Park mode short-circuit: archive + trace the ASR transcript,
-        // but no LLM refine and no paste injection. The user grabs the
-        // captured text later from clipboard history or trace UI.
-        if isParkMode {
-            completePark(trimmed)
-            return
-        }
-
-        let refiner = LLMRefiner.shared
-        if refiner.isEnabled && refiner.isConfigured {
-            refiningHoldWork?.cancel()
-            // Resolve the effective mode from BOTH toggles. Hardcoding the
-            // ternary against `claudeCodeModeEnabled` would silently fall
-            // back to `.refine` when structure mode is active, which would
-            // make the overlay show the wrong profile label (LLM call
-            // itself uses the routed structure profile via LLMRefiner).
-            let activeMode = LLMRefiner.activeModeFromToggles(
-                claudeCodeEnabled: refiner.claudeCodeModeEnabled,
-                structureEnabled: refiner.structureModeEnabled,
-                contextAwareEnabled: refiner.contextAwareModeEnabled
-            )
-            let translating = activeMode == .claudeCode
-            let profileLabel = activeProfileLabel(for: activeMode)
-
-            if translating {
-                // Translation flow: show bare ZH single-line for the entire
-                // LLM latency. Waveform keeps animating to signal "still
-                // working". When EN arrives, transition once to dual-line
-                // (56→80 reflow happens exactly once). No intermediate
-                // "Converting…" status — that would add a second reflow.
-                overlayPanel.transition(to: .zhReady(zh: trimmed))
-            } else {
-                // LLM-Chinese refine: single-line "Refining Chinese …"
-                // status throughout. The final `.bothReady` surfaces the
-                // refined result. Skip zhReady — separate ZH preview adds
-                // latency without info on this path.
-                overlayPanel.transition(
-                    to: .refining(
-                        zh: trimmed,
-                        elapsed: 0,
-                        translating: false,
-                        profileLabel: profileLabel
-                    )
-                )
-                startPhaseTimer { [weak self] elapsed in
-                    .refining(
-                        zh: self?.currentZH ?? "",
-                        elapsed: elapsed,
-                        translating: false,
-                        profileLabel: profileLabel
-                    )
-                }
-            }
-
-            refiner.refine(trimmed, requestId: requestId) { [weak self] result in
-                guard let self else { return }
-                self.logLatency("refine")
-                self.refiningHoldWork?.cancel()
-                self.refiningHoldWork = nil
-                self.stopPhaseTimer()
-                switch result {
-                case .success(let refined):
-                    let final = refined.isEmpty ? trimmed : refined
-                    self.tracer.recordLLM(final, mode: activeMode.rawValue)
-                    self.completeWithEnglish(final)
-                case .failure(let error):
-                    NSLog("[AppDelegate] LLM failed: %@", error.localizedDescription)
-                    self.overlayPanel.transition(to: .error("LLM: \(error.localizedDescription)"))
-                    // Finalize the trace now with the ASR fallback as final.
-                    // The injectImmediately closure below fires 1.2s later
-                    // and intentionally does not save to ClipboardArchive
-                    // (preserving prior behaviour); if the user records
-                    // again before then, the next `begin()` would discard
-                    // this trace, so persist eagerly.
-                    self.tracer.recordError("LLM: \(error.localizedDescription)")
-                    self.tracer.recordFinal(trimmed)
-                    self.tracer.finalize()
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in
-                        self?.injectImmediately(trimmed)
-                    }
-                }
-            }
-        } else {
-            // ASR-only path: single ready state. `.bothReady` already lingers
-            // ~0.7 s before dismissing, so a separate ZH-preview is redundant.
-            completeWithoutTranslation(trimmed)
-        }
+        jobQueue.enqueueHead(job)
     }
 
     /// LLM succeeded: show ZH + EN side-by-side for the linger window, then inject
     /// the English. Overlay handles dismissal internally after `overlayLingerSeconds`.
-    private func completeWithEnglish(_ english: String) {
+    fileprivate func completeWithEnglish(job: RecordingJob, zh: String, english: String) {
         // `translating` controls dual-line (ZH+EN) vs single-line overlay
         // render. Only ClaudeCode mode actually translates to a different
         // language; structure mode and refine mode both stay zh-TW so the
@@ -433,37 +364,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             contextAwareEnabled: refiner.contextAwareModeEnabled
         )
         let translating = activeMode == .claudeCode
-        overlayPanel.transition(to: .bothReady(zh: currentZH, en: english, translating: translating))
+        overlayPanel.transition(to: .bothReady(zh: zh, en: english, translating: translating))
         let stamp = ClipboardArchive.shared.saveSession(
-            zh: currentZH,
+            zh: zh,
             english: english,
-            traceId: tracer.currentTrace?.id
+            traceId: job.tracer.currentTrace?.id
         )
-        if let stamp { tracer.recordClipboard(timestamp: stamp) }
-        tracer.recordFinal(english)
-        tracer.finalize()
+        if let stamp { job.tracer.recordClipboard(timestamp: stamp) }
+        job.tracer.recordFinal(english)
+        job.tracer.finalize()
         injectImmediately(english)
     }
 
     /// ASR-only path: still show the final state with the same text in both rows
     /// for a consistent visual; reuse zhReady (no EN row) for clarity.
-    private func completeWithoutTranslation(_ text: String) {
-        // Promote to bothReady with EN duplicated, so the linger countdown engages.
-        // translating=false: ASR-only path, overlay renders single line (no
-        // duplicate ZH/EN rows).
+    fileprivate func completeWithoutTranslation(job: RecordingJob, text: String) {
         overlayPanel.transition(to: .bothReady(zh: text, en: text, translating: false))
         let stamp = ClipboardArchive.shared.saveSession(
             zh: text,
             english: text,
-            traceId: tracer.currentTrace?.id
+            traceId: job.tracer.currentTrace?.id
         )
-        if let stamp { tracer.recordClipboard(timestamp: stamp) }
-        tracer.recordFinal(text)
-        tracer.finalize()
+        if let stamp { job.tracer.recordClipboard(timestamp: stamp) }
+        job.tracer.recordFinal(text)
+        job.tracer.finalize()
         injectImmediately(text)
     }
 
-    private func injectImmediately(_ text: String) {
+    fileprivate func injectImmediately(_ text: String) {
         textInjector.inject(text)
         logLatency("inject")
         NSSound(named: .init("Pop"))?.play()
@@ -472,18 +400,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Park-mode completion: ASR-only transcript is archived to clipboard
     /// history (kind=session) and the trace is finalised with mode=park.
     /// No LLM, no paste — the user retrieves it later from history.
-    private func completePark(_ text: String) {
+    fileprivate func completePark(job: RecordingJob, text: String) {
         overlayPanel.transition(to: .bothReady(zh: text, en: text, translating: false))
         let stamp = ClipboardArchive.shared.saveSession(
             zh: text,
             english: "",
-            traceId: tracer.currentTrace?.id
+            traceId: job.tracer.currentTrace?.id
         )
-        if let stamp { tracer.recordClipboard(timestamp: stamp) }
-        tracer.recordPark()
-        tracer.finalize()
+        if let stamp { job.tracer.recordClipboard(timestamp: stamp) }
+        job.tracer.recordPark()
+        job.tracer.finalize()
         NSSound(named: .init("Pop"))?.play()
-        isParkMode = false
     }
 
     // MARK: - Park-mode hotkey
@@ -711,7 +638,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(.separator())
 
         let exportFixturesItem = NSMenuItem(
-            title: "Export Fixtures...",
+            title: "匯出錄音與文字稿…",
             action: #selector(exportFixtures),
             keyEquivalent: ""
         )
@@ -948,36 +875,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         modelMemoryWindow.showAndStart()
     }
 
+    /// Menu action — manual export. Always interactive (silent=false): shows
+    /// alert on completion, and prompts for destination if none remembered.
     @objc private func exportFixtures() {
-        let panel = NSOpenPanel()
-        panel.canChooseDirectories = true
-        panel.canChooseFiles = false
-        panel.allowsMultipleSelection = false
-        panel.prompt = "Choose Export Destination"
-        panel.message = "Select a directory to export trace fixtures (audio + transcripts)"
-        guard panel.runModal() == .OK, let dest = panel.url else { return }
-        // Run I/O off the main queue so a large TraceStore doesn't freeze the
-        // menu / status bar.  showAlert must hop back to main since NSAlert
-        // is main-thread only.
-        DispatchQueue.global(qos: .userInitiated).async {
+        runFixtureExport(silent: false)
+    }
+
+    /// UserDefaults key for the remembered fixture export destination.
+    /// `silent=true` mode skips entirely when this key is absent.
+    private static let fixtureDestinationKey = "fixtureExportDestination"
+
+    /// Core fixture export flow used by both the menu action and launch
+    /// auto-sync.
+    ///
+    /// - `silent=false`: interactive — prompts for destination if missing,
+    ///   shows completion / failure alert.
+    /// - `silent=true`: launch auto-sync — no UI; skip if no destination
+    ///   remembered; log result via NSLog.
+    private func runFixtureExport(silent: Bool) {
+        let savedPath = UserDefaults.standard.string(forKey: Self.fixtureDestinationKey)
+        let destinationURL: URL
+
+        if let savedPath, FileManager.default.fileExists(atPath: savedPath) {
+            destinationURL = URL(fileURLWithPath: savedPath)
+        } else {
+            guard !silent else {
+                NSLog("[AppDelegate] Fixture auto-sync skipped: no destination configured")
+                return
+            }
+            let panel = NSOpenPanel()
+            panel.canChooseDirectories = true
+            panel.canChooseFiles = false
+            panel.allowsMultipleSelection = false
+            panel.prompt = "選擇匯出目錄"
+            panel.message = "選擇要存放錄音檔與文字稿的目錄(每筆 trace 會輸出 audio/*.wav + transcripts/*.txt 一組;之後 App 啟動時會自動同步到此目錄)"
+            guard panel.runModal() == .OK, let dest = panel.url else { return }
+            UserDefaults.standard.set(dest.path, forKey: Self.fixtureDestinationKey)
+            destinationURL = dest
+        }
+
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             do {
-                let results = try FixtureExporter.exportAll(destination: dest)
+                let results = try FixtureExporter.exportAll(destination: destinationURL)
                 let exported = results.filter { $0.skippedReason == nil }.count
                 let skipped = results.count - exported
-                DispatchQueue.main.async { [weak self] in
-                    self?.showAlert(
-                        title: "Fixture Export Done",
-                        message: "\(exported) exported, \(skipped) skipped\nDestination: \(dest.path)"
+                if silent {
+                    NSLog(
+                        "[AppDelegate] Fixture auto-sync: %d exported, %d skipped → %@",
+                        exported,
+                        skipped,
+                        destinationURL.path
                     )
+                } else {
+                    DispatchQueue.main.async { [weak self] in
+                        self?.showAlert(
+                            title: "匯出完成",
+                            message: "已匯出 \(exported) 筆,略過 \(skipped) 筆\n目的地:\(destinationURL.path)\n\n(App 啟動時會自動同步到此目錄,已校對的 transcript 不會被覆寫)"
+                        )
+                    }
                 }
             } catch {
-                DispatchQueue.main.async { [weak self] in
-                    self?.showAlert(
-                        title: "Fixture Export Failed",
-                        message: error.localizedDescription
-                    )
+                if silent {
+                    NSLog("[AppDelegate] Fixture auto-sync failed: %@", error.localizedDescription)
+                } else {
+                    DispatchQueue.main.async { [weak self] in
+                        self?.showAlert(title: "匯出失敗", message: error.localizedDescription)
+                    }
                 }
             }
+            _ = self // silence weak-self unused warning when silent
         }
     }
 
@@ -1090,3 +1056,169 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 }
 
+// MARK: - JobRunner
+
+/// AppDelegate adopts JobRunner so RecordingJobQueue can drive the ASR/LLM
+/// pipeline without taking on AppKit / network dependencies. All callbacks
+/// run on the main queue (ASRClient / LLMRefiner already marshal back via
+/// DispatchQueue.main.async before invoking completion handlers).
+extension AppDelegate: JobRunner {
+    func runASR(_ job: RecordingJob, completion: @escaping (Result<String, Error>) -> Void) {
+        ASRClient.shared.transcribe(
+            wavURL: job.wavURL,
+            onArchived: { archivedURL in
+                // Repoint trace audioPath to the persistent archive copy so
+                // downstream fixture export / replay can find the file after
+                // AudioRecorder removes the tmp wav.
+                job.tracer.updateAudioPath(archivedURL.path)
+            }
+        ) { [weak self] result in
+            self?.logLatency("ASR")
+            self?.stopPhaseTimer()
+            switch result {
+            case .success(let asrResult):
+                let trimmed = asrResult.text.trimmingCharacters(in: .whitespacesAndNewlines)
+                if trimmed.isEmpty {
+                    completion(.failure(JobPipelineError.emptyTranscript))
+                    return
+                }
+                job.tracer.recordASR(trimmed)
+                completion(.success(trimmed))
+            case .failure(let error):
+                NSLog("[AppDelegate] ASR failed (job=%@): %@",
+                      job.id.uuidString, error.localizedDescription)
+                completion(.failure(error))
+            }
+        }
+    }
+
+    func runLLM(asr: String, job: RecordingJob, completion: @escaping (Result<String?, Error>) -> Void) {
+        // Park jobs skip LLM — the runner pastes nothing and archives ASR.
+        if job.isPark {
+            completion(.success(nil))
+            return
+        }
+        let refiner = LLMRefiner.shared
+        guard refiner.isEnabled, refiner.isConfigured else {
+            // ASR-only mode: skip LLM. nil signals the runner to paste raw ASR.
+            completion(.success(nil))
+            return
+        }
+
+        let activeMode = LLMRefiner.activeModeFromToggles(
+            claudeCodeEnabled: refiner.claudeCodeModeEnabled,
+            structureEnabled: refiner.structureModeEnabled,
+            contextAwareEnabled: refiner.contextAwareModeEnabled
+        )
+        let translating = activeMode == .claudeCode
+        let profileLabel = activeProfileLabel(for: activeMode)
+
+        if translating {
+            // Translation flow: show bare ZH single-line for the entire
+            // LLM latency. Waveform keeps animating to signal "still
+            // working". When EN arrives, transition once to dual-line
+            // (56→80 reflow happens exactly once). No intermediate
+            // "Converting…" status — that would add a second reflow.
+            overlayPanel.transition(to: .zhReady(zh: asr))
+        } else {
+            // LLM-Chinese refine: single-line "Refining Chinese …" status
+            // throughout. The final `.bothReady` surfaces the refined result.
+            overlayPanel.transition(
+                to: .refining(zh: asr, elapsed: 0, translating: false, profileLabel: profileLabel)
+            )
+            startPhaseTimer { elapsed in
+                .refining(zh: asr, elapsed: elapsed, translating: false, profileLabel: profileLabel)
+            }
+        }
+
+        let requestId = job.wavURL.deletingPathExtension().lastPathComponent
+        refiner.refine(asr, requestId: requestId) { [weak self] result in
+            self?.logLatency("refine")
+            self?.stopPhaseTimer()
+            switch result {
+            case .success(let refined):
+                let final = refined.isEmpty ? asr : refined
+                job.tracer.recordLLM(final, mode: activeMode.rawValue)
+                completion(.success(final))
+            case .failure(let error):
+                NSLog("[AppDelegate] LLM failed (job=%@): %@",
+                      job.id.uuidString, error.localizedDescription)
+                self?.overlayPanel.transition(
+                    to: .error("LLM: \(error.localizedDescription)")
+                )
+                completion(.failure(error))
+            }
+        }
+    }
+
+    func cancelInflight(_ job: RecordingJob) {
+        // Both clients share singleton URLSession tasks; cancelling here is
+        // safe because the queue serialises jobs (no concurrent in-flight).
+        // The interrupted job's `cancelled` flag also short-circuits any
+        // stale callback that fires after cancel.
+        ASRClient.shared.cancel()
+        LLMRefiner.shared.cancel()
+    }
+
+    func completeJob(_ job: RecordingJob, asr: String, llm: String?) {
+        if job.isPark {
+            completePark(job: job, text: asr)
+            return
+        }
+        if let llm {
+            completeWithEnglish(job: job, zh: asr, english: llm)
+            return
+        }
+        // llm=nil: either LLM was disabled (ASR-only mode) or LLM failed.
+        // For ASR-only mode, paste raw ASR immediately as the final output.
+        // For LLM failure, the runLLM callback already showed an error
+        // overlay; we still archive + paste the ASR fallback so the user's
+        // speech isn't lost.
+        let refiner = LLMRefiner.shared
+        if refiner.isEnabled && refiner.isConfigured {
+            // LLM failure path — record + finalize the tracer, then paste
+            // raw ASR. We persist eagerly so a follow-up recording's tracer
+            // begin() doesn't discard this trace.
+            job.tracer.recordError("LLM failed")
+            job.tracer.recordFinal(asr)
+            job.tracer.finalize()
+            injectImmediately(asr)
+        } else {
+            completeWithoutTranslation(job: job, text: asr)
+        }
+    }
+
+    func handleJobFailure(_ job: RecordingJob, error: Error) {
+        let msg: String
+        if let pipelineError = error as? JobPipelineError {
+            msg = pipelineError.userMessage
+        } else {
+            msg = "ASR: \(error.localizedDescription)"
+        }
+        overlayPanel.transition(to: .error(msg))
+        job.tracer.recordError(msg)
+        job.tracer.finalize()
+    }
+
+    func handleJobDropped(_ job: RecordingJob) {
+        // Sub-threshold tap: trace it so the user can see it in the trace
+        // log even though we won't paste / archive it.
+        job.tracer.recordError("dropped: recording shorter than interrupt threshold")
+        job.tracer.finalize()
+    }
+}
+
+/// Pipeline-internal failure modes that need a friendly user-facing message
+/// (instead of the raw `NSError` description). Empty transcript is the only
+/// one for now — gateway / network errors flow through unchanged.
+private enum JobPipelineError: LocalizedError {
+    case emptyTranscript
+
+    var userMessage: String {
+        switch self {
+        case .emptyTranscript: return "No speech detected"
+        }
+    }
+
+    var errorDescription: String? { userMessage }
+}

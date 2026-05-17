@@ -57,6 +57,16 @@ final class RecordingTracer: @unchecked Sendable {
         )
     }
 
+    /// Repoint `audioPath` to the persistent archive location after
+    /// RecordingArchive copies the tmp wav. Does NOT add a log entry —
+    /// the original `recordAudio(...)` call already logged `.recording`,
+    /// and we just want the final on-disk reference to survive
+    /// AudioRecorder's tmp cleanup.
+    func updateAudioPath(_ path: String) {
+        guard currentTrace != nil else { return }
+        currentTrace?.audioPath = path
+    }
+
     func recordASR(_ text: String) {
         guard currentTrace != nil else { return }
         currentTrace?.asrText = text

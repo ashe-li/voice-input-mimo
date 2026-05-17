@@ -98,6 +98,19 @@ final class ASRClient {
         request.httpBody = body
 
         currentTask = URLSession.shared.dataTask(with: request) { data, response, error in
+            // Cancelled mid-flight: the caller (RecordingJobQueue) has already
+            // marked the originating job cancelled and intends to resume it
+            // later. Skipping archive/remove/completion here means:
+            //   1) wav file stays on disk so the resume call can re-read it
+            //      (archive+remove would orphan it relative to job.wavURL),
+            //   2) caller's completion handler doesn't fire, so its side
+            //      effects (e.g. stopPhaseTimer in the JobRunner) don't
+            //      stomp on the new in-flight segment's overlay state.
+            let nsErr = error as NSError?
+            if nsErr?.code == NSURLErrorCancelled {
+                return
+            }
+
             // Archive wav to retention dir (LRU: keep last N files OR <= M MB)
             let archivedURL = RecordingArchive.archive(wavURL, audioBytes: audioData.count)
             try? FileManager.default.removeItem(at: wavURL)

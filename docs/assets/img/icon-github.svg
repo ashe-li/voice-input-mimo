@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- Simplified branch-node mark (avoids using the registered Octocat) -->
+  <circle cx="6" cy="6" r="2.4" stroke="currentColor" stroke-width="1.8"/>
+  <circle cx="6" cy="18" r="2.4" stroke="currentColor" stroke-width="1.8"/>
+  <circle cx="18" cy="12" r="2.4" stroke="currentColor" stroke-width="1.8"/>
+  <path d="M6 8.4 V15.6 M8.4 6 H13.5 a2.5 2.5 0 0 1 2.5 2.5 V9.5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" fill="none"/>
+</svg>

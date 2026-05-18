@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 340" fill="none" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- Input bubble -->
+  <g transform="translate(20,40)">
+    <rect width="240" height="260" rx="14" fill="#FAF7EE" stroke="#D8D2C3"/>
+    <text x="14" y="26" font-family="JetBrains Mono, monospace" font-size="10" letter-spacing="2" fill="#605C55">YOU SAID</text>
+    <text x="14" y="58" font-size="13" fill="#0B0D12">「會議結論…」 →</text>
+    <text x="14" y="86" font-size="13" fill="#0B0D12">「TODO 下週要…」 →</text>
+    <text x="14" y="114" font-size="13" fill="#0B0D12">「驗收條件…」 →</text>
+    <text x="14" y="142" font-size="13" fill="#0B0D12">「親愛的…敬上」 →</text>
+    <text x="14" y="170" font-size="13" fill="#0B0D12">一般敘事 / 想法 →</text>
+
+    <text x="14" y="216" font-family="JetBrains Mono, monospace" font-size="11" fill="#FF5A1F">StructureRouter.swift</text>
+    <text x="14" y="236" font-family="JetBrains Mono, monospace" font-size="10" fill="#605C55">純 Swift · 不打 LLM</text>
+  </g>
+
+  <!-- Arrows -->
+  <g stroke="#FF5A1F" stroke-width="1.8" fill="none">
+    <path d="M270 60 H320" marker-end="url(#m-arrow)"/>
+    <path d="M270 102 H320" marker-end="url(#m-arrow)"/>
+    <path d="M270 144 H320" marker-end="url(#m-arrow)"/>
+    <path d="M270 186 H320" marker-end="url(#m-arrow)"/>
+    <path d="M270 228 H320" marker-end="url(#m-arrow)"/>
+  </g>
+  <defs>
+    <marker id="m-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto">
+      <path d="M0 0 L10 5 L0 10 Z" fill="#FF5A1F"/>
+    </marker>
+  </defs>
+
+  <!-- Templates -->
+  <g transform="translate(330,40)">
+    <g>
+      <rect width="370" height="44" rx="10" fill="#0B0D12"/>
+      <text x="18" y="28" font-size="13" fill="#FAF7EE">meeting · 會議紀錄模板</text>
+      <text x="350" y="28" text-anchor="end" font-family="JetBrains Mono, monospace" font-size="11" fill="#C7F470">No.1</text>
+    </g>
+    <g transform="translate(0,52)">
+      <rect width="370" height="44" rx="10" fill="#0B0D12"/>
+      <text x="18" y="28" font-size="13" fill="#FAF7EE">task · 任務清單模板</text>
+      <text x="350" y="28" text-anchor="end" font-family="JetBrains Mono, monospace" font-size="11" fill="#C7F470">No.2</text>
+    </g>
+    <g transform="translate(0,104)">
+      <rect width="370" height="44" rx="10" fill="#0B0D12"/>
+      <text x="18" y="28" font-size="13" fill="#FAF7EE">requirement · 需求草稿模板</text>
+      <text x="350" y="28" text-anchor="end" font-family="JetBrains Mono, monospace" font-size="11" fill="#C7F470">No.3</text>
+    </g>
+    <g transform="translate(0,156)">
+      <rect width="370" height="44" rx="10" fill="#0B0D12"/>
+      <text x="18" y="28" font-size="13" fill="#FAF7EE">letter · 信件模板</text>
+      <text x="350" y="28" text-anchor="end" font-family="JetBrains Mono, monospace" font-size="11" fill="#C7F470">No.4</text>
+    </g>
+    <g transform="translate(0,208)">
+      <rect width="370" height="44" rx="10" fill="#FAF7EE" stroke="#D8D2C3"/>
+      <text x="18" y="28" font-size="13" fill="#0B0D12">article / fallback · 通用敘事</text>
+      <text x="350" y="28" text-anchor="end" font-family="JetBrains Mono, monospace" font-size="11" fill="#FF5A1F">No.5</text>
+    </g>
+  </g>
+</svg>

@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 520" fill="none" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- Macbook-ish window chrome (generic, not Apple branding) -->
+  <defs>
+    <linearGradient id="g-paper" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FBFAF6"/>
+      <stop offset="1" stop-color="#EFEBE0"/>
+    </linearGradient>
+    <linearGradient id="g-wave" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FF5A1F"/>
+      <stop offset="0.5" stop-color="#FF8A4F"/>
+      <stop offset="1" stop-color="#4DA8FF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background editor "window" -->
+  <rect x="20" y="40" width="600" height="380" rx="18" fill="url(#g-paper)" stroke="#D8D2C3"/>
+  <circle cx="46" cy="64" r="6" fill="#E5614A"/>
+  <circle cx="68" cy="64" r="6" fill="#F4B548"/>
+  <circle cx="90" cy="64" r="6" fill="#7CC57F"/>
+
+  <!-- Editor text lines -->
+  <g font-size="12" fill="#605C55">
+    <text x="40" y="110">// SettingsView.swift</text>
+    <text x="40" y="138">struct SettingsView: View {</text>
+    <text x="40" y="160" fill="#0B0D12">    var body: some View {</text>
+    <text x="40" y="182" fill="#0B0D12">        NavigationSplitView {</text>
+    <text x="40" y="204">            // 把這個 component 重構成 hook ▍</text>
+    <text x="40" y="226" fill="#0B0D12">        } detail: {</text>
+    <text x="40" y="248">            ProfilesPane()</text>
+    <text x="40" y="270" fill="#0B0D12">        }</text>
+    <text x="40" y="292" fill="#0B0D12">    }</text>
+    <text x="40" y="314" fill="#0B0D12">}</text>
+  </g>
+
+  <!-- Cursor caret -->
+  <rect x="313" y="194" width="2" height="14" fill="#FF5A1F"/>
+
+  <!-- Bottom overlay panel -->
+  <g>
+    <rect x="100" y="430" width="440" height="70" rx="20" fill="#0B0D12"/>
+    <!-- Mic dot pulse -->
+    <circle cx="138" cy="465" r="11" fill="#FF5A1F"/>
+    <circle cx="138" cy="465" r="18" stroke="#FF5A1F" stroke-opacity="0.45" stroke-width="2"/>
+    <circle cx="138" cy="465" r="25" stroke="#FF5A1F" stroke-opacity="0.2" stroke-width="2"/>
+
+    <!-- Waveform bars -->
+    <g transform="translate(170,440)">
+      <rect x="0"   y="14" width="3" height="22" rx="1.5" fill="url(#g-wave)"/>
+      <rect x="8"   y="6"  width="3" height="38" rx="1.5" fill="url(#g-wave)"/>
+      <rect x="16"  y="10" width="3" height="30" rx="1.5" fill="url(#g-wave)"/>
+      <rect x="24"  y="2"  width="3" height="46" rx="1.5" fill="url(#g-wave)"/>
+      <rect x="32"  y="14" width="3" height="22" rx="1.5" fill="url(#g-wave)"/>
+      <rect x="40"  y="8"  width="3" height="34" rx="1.5" fill="url(#g-wave)"/>
+      <rect x="48"  y="0"  width="3" height="50" rx="1.5" fill="url(#g-wave)"/>
+      <rect x="56"  y="12" width="3" height="26" rx="1.5" fill="url(#g-wave)"/>
+      <rect x="64"  y="6"  width="3" height="38" rx="1.5" fill="url(#g-wave)"/>
+      <rect x="72"  y="14" width="3" height="22" rx="1.5" fill="url(#g-wave)"/>
+      <rect x="80"  y="10" width="3" height="30" rx="1.5" fill="url(#g-wave)"/>
+      <rect x="88"  y="4"  width="3" height="42" rx="1.5" fill="url(#g-wave)"/>
+      <rect x="96"  y="12" width="3" height="26" rx="1.5" fill="url(#g-wave)"/>
+      <rect x="104" y="16" width="3" height="18" rx="1.5" fill="url(#g-wave)"/>
+      <rect x="112" y="8"  width="3" height="34" rx="1.5" fill="url(#g-wave)"/>
+    </g>
+
+    <!-- Status -->
+    <g font-family="JetBrains Mono, ui-monospace, monospace" font-size="11" fill="#C7F470">
+      <text x="300" y="461">LISTENING · 02.4s</text>
+    </g>
+    <g font-size="13" fill="#FAF7EE">
+      <text x="300" y="481">把這個 component 重構成 hook</text>
+    </g>
+
+    <!-- Mode pill -->
+    <g transform="translate(440,452)">
+      <rect width="80" height="26" rx="13" fill="#FAF7EE"/>
+      <text x="40" y="17" text-anchor="middle" font-size="11" font-weight="600" fill="#0B0D12">EN translate</text>
+    </g>
+  </g>
+</svg>

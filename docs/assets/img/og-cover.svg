@@ -1,0 +1,43 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 630" fill="none" font-family="Inter Tight, 'Noto Sans TC', sans-serif">
+  <defs>
+    <linearGradient id="og-bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#F1EDE2"/>
+      <stop offset="1" stop-color="#FAF7EE"/>
+    </linearGradient>
+    <linearGradient id="og-wave" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#FF5A1F"/>
+      <stop offset="1" stop-color="#4DA8FF"/>
+    </linearGradient>
+  </defs>
+  <rect width="1200" height="630" fill="url(#og-bg)"/>
+
+  <g transform="translate(80,80)">
+    <rect width="56" height="56" rx="14" fill="#0B0D12"/>
+    <path d="M14 42 V18 L24 34 L30 22 L36 34 L46 18 V42" stroke="#FF5A1F" stroke-width="3.4" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+    <circle cx="30" cy="42" r="3.2" fill="#C7F470"/>
+    <text x="80" y="38" font-weight="600" font-size="28" fill="#0B0D12">Voice Input MiMo</text>
+  </g>
+
+  <text x="80" y="280" font-weight="600" font-size="78" fill="#0B0D12">按住 Fn 鍵 講話，</text>
+  <text x="80" y="370" font-weight="600" font-size="78" fill="#0B0D12">把句子直接<tspan fill="#FF5A1F">貼回游標</tspan>。</text>
+
+  <text x="80" y="450" font-size="24" fill="#605C55">MiMo-V2.5-ASR · 中英 code-switching · 4 種輸出 · 本機運算 · MIT</text>
+
+  <!-- Waveform decoration -->
+  <g transform="translate(80,520)">
+    <rect x="0"   y="22" width="6" height="22" rx="3" fill="url(#og-wave)"/>
+    <rect x="14"  y="10" width="6" height="46" rx="3" fill="url(#og-wave)"/>
+    <rect x="28"  y="18" width="6" height="30" rx="3" fill="url(#og-wave)"/>
+    <rect x="42"  y="2"  width="6" height="62" rx="3" fill="url(#og-wave)"/>
+    <rect x="56"  y="14" width="6" height="38" rx="3" fill="url(#og-wave)"/>
+    <rect x="70"  y="22" width="6" height="22" rx="3" fill="url(#og-wave)"/>
+    <rect x="84"  y="6"  width="6" height="54" rx="3" fill="url(#og-wave)"/>
+    <rect x="98"  y="14" width="6" height="38" rx="3" fill="url(#og-wave)"/>
+    <rect x="112" y="0"  width="6" height="66" rx="3" fill="url(#og-wave)"/>
+    <rect x="126" y="20" width="6" height="26" rx="3" fill="url(#og-wave)"/>
+    <rect x="140" y="10" width="6" height="46" rx="3" fill="url(#og-wave)"/>
+    <rect x="154" y="22" width="6" height="22" rx="3" fill="url(#og-wave)"/>
+  </g>
+
+  <text x="80" y="595" font-family="JetBrains Mono, monospace" font-size="18" fill="#FF5A1F">github.com/ashe-li/voice-input-mimo</text>
+</svg>

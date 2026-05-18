@@ -1,0 +1,398 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover" />
+<title>Voice Input MiMo · 按住 Fn 講話，AI 把句子接過去</title>
+<meta name="description" content="按住 Fn 鍵講話 → 自動轉錄 + LLM 後處理 → 貼到游標位置。本機運算、開源 MIT，macOS 14+。" />
+<meta property="og:title" content="Voice Input MiMo" />
+<meta property="og:description" content="按住 Fn 鍵講話 → 自動轉錄 + LLM 後處理 → 貼到游標位置。" />
+<meta property="og:type" content="website" />
+<meta property="og:image" content="./assets/img/og-cover.svg" />
+<meta name="theme-color" content="#0B0D12" />
+<link rel="icon" type="image/svg+xml" href="./assets/img/logo-mark.svg" />
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<link href="https://fonts.googleapis.com/css2?family=Inter+Tight:wght@400;500;600;700&family=Inter:wght@400;500;600&family=Noto+Sans+TC:wght@400;500;700&family=JetBrains+Mono:wght@400;600&display=swap" rel="stylesheet" />
+<link rel="stylesheet" href="./assets/css/style.css" />
+</head>
+<body data-theme="paper">
+<a class="skip" href="#main">跳到主要內容</a>
+
+<header class="topbar" aria-label="網站導覽">
+  <div class="container topbar-inner">
+    <a class="brand" href="#top" aria-label="Voice Input MiMo">
+      <img src="./assets/img/logo-mark.svg" alt="" width="28" height="28" />
+      <span class="brand-name">Voice Input <em>MiMo</em></span>
+    </a>
+    <nav class="nav" aria-label="主導覽">
+      <a href="#loop">流程</a>
+      <a href="#modes">輸出模式</a>
+      <a href="#prompts">Prompt 客製</a>
+      <a href="#shortcuts">快捷鍵</a>
+      <a href="#download">下載</a>
+    </nav>
+    <div class="topbar-cta">
+      <a class="btn btn-ghost" href="https://github.com/ashe-li/voice-input-mimo" target="_blank" rel="noopener">
+        <img src="./assets/img/icon-github.svg" alt="" width="16" height="16" />
+        GitHub
+      </a>
+      <a class="btn btn-solid" href="#download">立即下載</a>
+    </div>
+  </div>
+</header>
+
+<main id="main">
+
+  <section id="top" class="hero">
+    <div class="container hero-inner">
+      <div class="hero-copy">
+        <div class="eyebrow">macOS · 開源 · 本機運算</div>
+        <h1>
+          按住 <span class="kbd">Fn</span> 鍵，<br />
+          把腦中那句中文，<br />
+          直接<mark class="hl">貼到游標</mark>。
+        </h1>
+        <p class="lead">voice in · context aware</p>
+        <p class="desc">
+          MiMo-V2.5-ASR 原生支援中英 code-switching，<code>useState</code> / <code>API</code> / <code>component</code> 不再被聽成「Yu 是 Date」「A 屁 I」「康波奶特」。
+          講完一句，4 種輸出模式擇一處理，自動貼回你剛剛輸入的位置。
+        </p>
+        <div class="cta-row">
+          <a class="btn btn-solid btn-lg" href="#download">
+            免費下載
+            <img src="./assets/img/icon-arrow.svg" alt="" width="14" height="14" />
+          </a>
+          <a class="btn btn-ghost btn-lg" href="#loop">看它怎麼運作</a>
+        </div>
+        <ul class="hero-pills" aria-label="技術徽章">
+          <li>· macOS 14+ Apple Silicon</li>
+          <li>· 本機運算 不上雲</li>
+          <li>· 開源 MIT</li>
+          <li>· 原生 Markdown 友善</li>
+        </ul>
+      </div>
+      <div class="hero-stage" aria-hidden="true">
+        <div class="stage-card">
+          <img src="./assets/img/mockup-overlay.svg" alt="" loading="eager" />
+        </div>
+        <div class="stage-orb stage-orb-a"></div>
+        <div class="stage-orb stage-orb-b"></div>
+      </div>
+    </div>
+  </section>
+
+  <section id="loop" class="section section-loop">
+    <div class="container">
+      <div class="section-head">
+        <span class="kicker">The Loop</span>
+        <h2>從口述到游標，<br />一條完整的 5 拍迴圈</h2>
+      </div>
+
+      <ol class="loop-list">
+        <li class="loop-item">
+          <article>
+            <div class="loop-num">No.01 · capture</div>
+            <h3><mark class="hl">按住 Fn</mark> 講話，放開就送出</h3>
+            <p class="loop-lead">不用按 toggle，不用喚醒詞。按住、講、放開，三步完成輸入。</p>
+            <div class="card-illus">
+              <img src="./assets/img/illus-capture.svg" alt="" />
+            </div>
+          </article>
+        </li>
+
+        <li class="loop-item">
+          <article>
+            <div class="loop-num">No.02 · transcribe</div>
+            <h3>MiMo ASR 把中英混講<mark class="hl">真的聽懂</mark></h3>
+            <p class="loop-lead">
+              用 Xiaomi 開源的 MiMo-V2.5-ASR（MLX INT4），中英 code-switching 是 native 能力，
+              不是「中文 ASR 強行接英文 token」。
+            </p>
+            <div class="phrase-grid">
+              <div class="phrase">
+                <span class="phrase-label">你說</span>
+                <span class="phrase-text">把這個 component 重構成 hook</span>
+              </div>
+              <div class="phrase">
+                <span class="phrase-label">傳統 ASR</span>
+                <span class="phrase-text bad">把這個康波奶特 重構成 厚客</span>
+              </div>
+              <div class="phrase">
+                <span class="phrase-label">MiMo ASR</span>
+                <span class="phrase-text good">把這個 component 重構成 hook</span>
+              </div>
+            </div>
+          </article>
+        </li>
+
+        <li class="loop-item">
+          <article>
+            <div class="loop-num">No.03 · refine</div>
+            <h3>同一段口述，<mark class="hl">4 種輸出</mark></h3>
+            <p class="loop-lead">
+              依當下需要切換：最快的純 ASR、清掉口語雜質的修正、給 Claude Code / Cursor 的英文翻譯、自動分流到模板的複合情境。
+            </p>
+            <div class="card-illus">
+              <img src="./assets/img/illus-refine.svg" alt="" />
+            </div>
+          </article>
+        </li>
+
+        <li class="loop-item">
+          <article>
+            <div class="loop-num">No.04 · route</div>
+            <h3>關鍵字一出，<mark class="hl">模板自己接</mark></h3>
+            <p class="loop-lead">
+              選「複合情境」後，純 Swift router 看內容裡有沒有「會議結論 / TODO / 驗收條件 / 敬上」這類關鍵字，
+              自動切到對應的 5 種模板。不打 LLM 做 routing，省一次 call。
+            </p>
+            <div class="card-illus">
+              <img src="./assets/img/illus-route.svg" alt="" />
+            </div>
+          </article>
+        </li>
+
+        <li class="loop-item">
+          <article>
+            <div class="loop-num">No.05 · paste</div>
+            <h3>結果<mark class="hl">回到游標</mark>原本的位置</h3>
+            <p class="loop-lead">
+              貼上的時機點是你放開 Fn 的當下；不會跳出獨立視窗、不會打斷你正在打字的 app。
+              Overlay 顯示 Listening → Refining → Done 三態，狀態列也同步。
+            </p>
+            <div class="card-illus">
+              <img src="./assets/img/illus-paste.svg" alt="" />
+            </div>
+          </article>
+        </li>
+      </ol>
+    </div>
+  </section>
+
+  <section id="modes" class="section section-modes">
+    <div class="container">
+      <div class="section-head">
+        <span class="kicker">Output Modes</span>
+        <h2>4 種輸出 · 速度與用途<br />一目了然</h2>
+      </div>
+
+      <div class="mode-grid">
+        <article class="mode-card" data-mode="raw">
+          <header>
+            <img class="mode-glyph" src="./assets/img/glyph-raw.svg" alt="" />
+            <h3>中文 ASR 原文</h3>
+            <span class="mode-speed">最快</span>
+          </header>
+          <p>不打 LLM，講完就貼。當你只要把口述變成純文字，越快越好。</p>
+          <ul>
+            <li>適合：即時筆記、純中文輸入</li>
+            <li>延遲：&lt; 1s（音檔長度依語速）</li>
+          </ul>
+        </article>
+
+        <article class="mode-card" data-mode="refine">
+          <header>
+            <img class="mode-glyph" src="./assets/img/glyph-refine.svg" alt="" />
+            <h3>中文 LLM 修正</h3>
+            <span class="mode-speed">快</span>
+          </header>
+          <p>用小 LLM call 去掉口語雜質（嗯、那個、就是…），保留原意。</p>
+          <ul>
+            <li>適合：會議發言、口齒不清的中文 cleanup</li>
+            <li>不改詞意、不擴寫</li>
+          </ul>
+        </article>
+
+        <article class="mode-card" data-mode="claude">
+          <header>
+            <img class="mode-glyph" src="./assets/img/glyph-claude.svg" alt="" />
+            <h3>英文翻譯</h3>
+            <span class="mode-speed">中</span>
+          </header>
+          <p>口述中文 → 英文。輸出語氣偏給 AI 工具讀的工程語，不是文學翻譯。</p>
+          <ul>
+            <li>適合：Claude Code / Cursor / 英文 PR description</li>
+            <li>保留代碼識別字</li>
+          </ul>
+        </article>
+
+        <article class="mode-card" data-mode="structure">
+          <header>
+            <img class="mode-glyph" src="./assets/img/glyph-structure.svg" alt="" />
+            <h3>中文 複合情境</h3>
+            <span class="mode-speed">中～慢</span>
+          </header>
+          <p>關鍵字自動分流到 5 種模板：會議紀錄 / 任務清單 / 需求草稿 / 信件 / 文章。</p>
+          <ul>
+            <li>適合：把零散口述展開成可用的初稿</li>
+            <li>路由邏輯純 Swift，可預測</li>
+          </ul>
+        </article>
+      </div>
+
+      <p class="hint">
+        <strong>切換方式：</strong>
+        <kbd>Ctrl</kbd>+<kbd>⌥</kbd>+<kbd>→</kbd> / <kbd>←</kbd> 在 4 種模式間輪轉，
+        或從 menu bar mic 圖示挑「輸出模式」子選單。
+      </p>
+    </div>
+  </section>
+
+  <section id="prompts" class="section section-prompts">
+    <div class="container split">
+      <div class="split-copy">
+        <span class="kicker">Prompts · Skills</span>
+        <h2>Prompt 結構像積木 <br /><mark class="hl">不用改程式碼</mark></h2>
+        <p>
+          每種輸出模式背後是一組 Profile。Profile 由 N 個 Skill compose 而成
+          （例：<code>output-english-only</code> + <code>recover-en-cn-homophones</code> + <code>drop-fillers</code>）。
+        </p>
+        <ul class="bullets">
+          <li><strong>12 個 builtin skills</strong>，可複製成自己的版本</li>
+          <li><strong>9 個 builtin profiles</strong>，三類（Refine / ClaudeCode / Structure）各自獨立</li>
+          <li><strong>三層 fallback</strong>：Profile → UserDefaults override → hardcoded builtin，任一層 miss 都不會 crash</li>
+          <li><strong>JSON bundle 匯入 / 匯出</strong>，可分享給隊友或備份</li>
+        </ul>
+      </div>
+      <div class="split-visual">
+        <img src="./assets/img/mockup-prompts.svg" alt="" />
+      </div>
+    </div>
+  </section>
+
+  <section class="section section-glossary">
+    <div class="container split reverse">
+      <div class="split-visual">
+        <img src="./assets/img/mockup-glossary.svg" alt="" />
+      </div>
+      <div class="split-copy">
+        <span class="kicker">Glossary</span>
+        <h2>專有名詞詞庫<br /><mark class="hl">不再被亂翻</mark></h2>
+        <p>
+          公司名、產品名、內部 repo、雲端 brand — 這些 LLM 最常猜錯的字，
+          開機時自動 inject 進 system prompt 的 Glossary section。
+        </p>
+        <div class="glossary-examples">
+          <div class="g-row"><code>focus</code><span class="arrow">→</span><code>vocus</code></div>
+          <div class="g-row"><code>carpenter</code><span class="arrow">→</span><code>Karpenter</code></div>
+          <div class="g-row"><code>cloud flare</code><span class="arrow">→</span><code>Cloudflare</code></div>
+          <div class="g-row"><code>奶特 J 嗯思</code><span class="arrow">→</span><code>Next.js</code></div>
+        </div>
+        <p class="muted">JSON 匯入 / 匯出走 merge-by-id：同 id 取代，新 id 追加。</p>
+      </div>
+    </div>
+  </section>
+
+  <section id="shortcuts" class="section section-shortcuts">
+    <div class="container">
+      <div class="section-head">
+        <span class="kicker">Shortcuts</span>
+        <h2>10 秒能背完的快捷鍵</h2>
+      </div>
+      <div class="shortcut-grid">
+        <div class="shortcut-card">
+          <div class="combo"><kbd>Fn</kbd></div>
+          <div class="combo-label">按住錄音</div>
+          <p>放開後依當前模式處理並貼到游標。</p>
+        </div>
+        <div class="shortcut-card">
+          <div class="combo"><kbd>Ctrl</kbd>+<kbd>⌥</kbd>+<kbd>→</kbd></div>
+          <div class="combo-label">切下一個輸出模式</div>
+          <p>raw → refine → claudeCode → structure 輪轉。</p>
+        </div>
+        <div class="shortcut-card">
+          <div class="combo"><kbd>Ctrl</kbd>+<kbd>⌥</kbd>+<kbd>R</kbd></div>
+          <div class="combo-label">Park mode</div>
+          <p>錄音 + 存 trace + 存 Clipboard History，<em>不貼上</em>。</p>
+        </div>
+        <div class="shortcut-card">
+          <div class="combo"><kbd>⌘</kbd>+<kbd>⌥</kbd>+<kbd>H</kbd></div>
+          <div class="combo-label">Clipboard History</div>
+          <p>看歷次轉錄結果，含 trace 連結。</p>
+        </div>
+        <div class="shortcut-card">
+          <div class="combo"><kbd>⌘</kbd>+<kbd>⌥</kbd>+<kbd>M</kbd></div>
+          <div class="combo-label">Model Memory</div>
+          <p>監看 ASR / LLM 模型 RSS。</p>
+        </div>
+        <div class="shortcut-card">
+          <div class="combo"><kbd>⌘</kbd>+<kbd>,</kbd></div>
+          <div class="combo-label">Settings</div>
+          <p>7 個 panes：Profiles / Skills / Glossary / Shortcuts / ...</p>
+        </div>
+      </div>
+      <p class="hint">
+        錄音熱鍵在 <code>Settings → Shortcuts</code> 可改，5 個 preset 切換：Disabled / Fn / Control+Option+Space / Control+Option+V / Command+Shift+Space。
+      </p>
+    </div>
+  </section>
+
+  <section id="download" class="section section-download">
+    <div class="container download-inner">
+      <span class="kicker">Download</span>
+      <h2><mark class="hl">免費</mark>下載 · MIT 授權 · 完全本機</h2>
+      <p>
+        DMG 是 self-signed（沒做 Apple Notarization），第一次打開要右鍵 → 開啟。
+        詳細步驟在 DMG 內附的 README-INSTALL.txt 雙語版。
+      </p>
+      <div class="dl-row">
+        <a class="dl-card" href="https://github.com/ashe-li/voice-input-mimo/releases/latest" target="_blank" rel="noopener">
+          <img class="dl-icon" src="./assets/img/icon-apple.svg" alt="" />
+          <div>
+            <div class="dl-title">macOS Apple Silicon</div>
+            <div class="dl-sub">Universal · M1 / M2 / M3 / M4</div>
+          </div>
+          <img class="dl-arrow" src="./assets/img/icon-arrow.svg" alt="" />
+        </a>
+        <a class="dl-card secondary" href="https://github.com/ashe-li/voice-input-mimo" target="_blank" rel="noopener">
+          <img class="dl-icon" src="./assets/img/icon-github.svg" alt="" />
+          <div>
+            <div class="dl-title">從原始碼 build</div>
+            <div class="dl-sub"><code>make cert-setup &amp;&amp; make build</code></div>
+          </div>
+          <img class="dl-arrow" src="./assets/img/icon-arrow.svg" alt="" />
+        </a>
+      </div>
+      <div class="dl-meta">
+        <span>需要 macOS 14+（Sonoma）</span>
+        <span>·</span>
+        <span>強烈推薦 Apple Silicon（MLX 跑得順）</span>
+        <span>·</span>
+        <a href="https://github.com/ashe-li/voice-input-mimo/releases" target="_blank" rel="noopener">看所有 releases</a>
+      </div>
+
+      <div class="dep-note">
+        <h4>⚠️ 還需要兩個 backend</h4>
+        <p>
+          這個 app 是<strong>前端</strong>，會打 <a href="https://github.com/junkboy0315/local-llm-backend" target="_blank" rel="noopener">local-llm-backend</a> gateway（<code>:4000</code>）。
+          gateway 後面再 fan-out 到 ASR sidecar（本 repo 內附，<code>:8766</code>）和你自選的 LLM backend（推薦 <a href="https://github.com/junkboy0315/rapid-mlx" target="_blank" rel="noopener">Rapid-MLX</a>、Ollama、vLLM 都可）。
+        </p>
+        <p>
+          ASR sidecar 第一次跑會下載 ~4.5 GB 的 INT4 MLX model 到 <code>~/.cache/mimo-asr/</code>。LLM 自己挑，建議 Qwen3-8B 或同等級以上。
+        </p>
+      </div>
+    </div>
+  </section>
+
+</main>
+
+<footer class="footer">
+  <div class="container footer-inner">
+    <div class="footer-brand">
+      <img src="./assets/img/logo-mark.svg" alt="" width="22" height="22" />
+      <span>Voice Input MiMo</span>
+      <span class="footer-meta">© 2026 ashe-li · MIT License</span>
+    </div>
+    <nav class="footer-nav" aria-label="footer">
+      <a href="https://github.com/ashe-li/voice-input-mimo" target="_blank" rel="noopener">GitHub</a>
+      <a href="https://github.com/ashe-li/voice-input-mimo/releases" target="_blank" rel="noopener">Releases</a>
+      <a href="https://github.com/ashe-li/voice-input-mimo/issues" target="_blank" rel="noopener">Issues</a>
+      <a href="https://github.com/XiaomiMiMo/MiMo-V2.5" target="_blank" rel="noopener">MiMo ASR</a>
+    </nav>
+  </div>
+</footer>
+
+<script src="./assets/js/app.js" defer></script>
+</body>
+</html>

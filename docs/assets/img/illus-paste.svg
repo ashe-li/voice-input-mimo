@@ -1,0 +1,42 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 300" fill="none" font-family="Inter, 'Noto Sans TC', sans-serif">
+  <!-- App window with caret -->
+  <g transform="translate(40,40)">
+    <rect width="640" height="220" rx="16" fill="#FAF7EE" stroke="#D8D2C3"/>
+    <circle cx="22" cy="22" r="5" fill="#E5614A"/>
+    <circle cx="40" cy="22" r="5" fill="#F4B548"/>
+    <circle cx="58" cy="22" r="5" fill="#7CC57F"/>
+
+    <!-- Toolbar pretend -->
+    <rect x="80" y="14" width="220" height="20" rx="6" fill="#EFEBE0"/>
+
+    <!-- Text content -->
+    <g font-size="13" fill="#0B0D12">
+      <text x="28" y="78">PR description draft</text>
+    </g>
+    <g font-size="12" fill="#605C55">
+      <text x="28" y="106">Summary:</text>
+    </g>
+
+    <!-- The newly pasted line in highlight -->
+    <g>
+      <rect x="28" y="116" width="488" height="22" rx="4" fill="#C7F470" fill-opacity="0.55"/>
+      <text x="36" y="132" font-size="13" fill="#0B0D12">Refactor this component into a custom hook so the search bar can reuse it.</text>
+      <!-- Cursor caret right after -->
+      <rect x="525" y="118" width="2" height="18" fill="#FF5A1F">
+      </rect>
+    </g>
+
+    <g font-size="12" fill="#605C55">
+      <text x="28" y="162">Test plan:</text>
+      <text x="28" y="184">  - unit tests on hook</text>
+      <text x="28" y="202">  - visual regression on SearchBar</text>
+    </g>
+  </g>
+
+  <!-- Badge -->
+  <g transform="translate(520,18)">
+    <rect width="160" height="24" rx="12" fill="#0B0D12"/>
+    <circle cx="14" cy="12" r="4" fill="#C7F470"/>
+    <text x="24" y="16" font-family="JetBrains Mono, monospace" font-size="10" letter-spacing="2" fill="#FAF7EE">PASTED · 1.8s</text>
+  </g>
+</svg>

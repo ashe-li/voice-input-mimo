@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none">
+  <!-- Generic Apple-Silicon-style SoC mark (not the registered Apple logo) -->
+  <rect x="5" y="5" width="14" height="14" rx="3" stroke="currentColor" stroke-width="1.8"/>
+  <rect x="9" y="9" width="6" height="6" rx="1" fill="currentColor"/>
+  <path d="M3 9 H5 M3 12 H5 M3 15 H5 M19 9 H21 M19 12 H21 M19 15 H21 M9 3 V5 M12 3 V5 M15 3 V5 M9 19 V21 M12 19 V21 M15 19 V21" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+</svg>

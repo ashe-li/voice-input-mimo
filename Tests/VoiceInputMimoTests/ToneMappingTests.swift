@@ -83,6 +83,7 @@ final class ToneMappingTests: XCTestCase {
             ("com.apple.mail", .mode(.refine)),
             ("com.todesktop.230313mzl4w4u92", .mode(.claudeCode)),
             ("com.apple.Terminal", .mode(.claudeCode)),
+            ("com.cmuxterm.app", .mode(.claudeCode)),
             ("com.tinyspeck.slackmacgap", .mode(.refine)),
             ("notion.id", .mode(.structure)),
             ("md.obsidian", .mode(.structure)),

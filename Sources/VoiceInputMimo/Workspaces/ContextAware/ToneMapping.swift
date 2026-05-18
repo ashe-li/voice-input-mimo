@@ -72,6 +72,7 @@ enum ToneMapping {
         .init(bundleIDPrefix: "com.apple.Terminal", delegated: .claudeCode),
         .init(bundleIDPrefix: "dev.warp.Warp-Stable", delegated: .claudeCode),
         .init(bundleIDPrefix: "co.zeit.hyper", delegated: .claudeCode),
+        .init(bundleIDPrefix: "com.cmuxterm.app", delegated: .claudeCode),
 
         // 即時通訊 → refine (casual cleanup, no translation)
         .init(bundleIDPrefix: "com.tinyspeck.slackmacgap", delegated: .refine),

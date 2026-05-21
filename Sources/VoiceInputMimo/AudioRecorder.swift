@@ -6,6 +6,11 @@ import Foundation
 final class AudioRecorder {
     var onAudioLevel: ((Float) -> Void)?
     var onError: ((String) -> Void)?
+    /// Invoked on the main queue after `stopRecording()` writes the wav.
+    /// Receives the written URL and the file's RMS amplitude. Used to
+    /// surface silent recordings (phantom default input, muted mic) to
+    /// the UI without affecting the recording fast path.
+    var onPostRecord: ((URL, Float) -> Void)?
 
     private var recorder: AVAudioRecorder?
     private var levelTimer: Timer?
@@ -67,7 +72,43 @@ final class AudioRecorder {
         recorder = nil
         let url = currentURL
         currentURL = nil
+        if let url = url, let callback = onPostRecord {
+            // RMS is off the hot path — recording is already done. Read
+            // the file off-main and deliver the result on main so UI code
+            // can safely react.
+            DispatchQueue.global(qos: .userInitiated).async {
+                let rms = Self.computeRMS(at: url)
+                DispatchQueue.main.async { callback(url, rms) }
+            }
+        }
         return url
+    }
+
+    /// Read a wav file and return its RMS amplitude in float32 space.
+    /// Returns 0 if the file is unreadable, empty, or has no channel data.
+    /// Static so unit tests can verify against synthetic wavs without
+    /// instantiating an AudioRecorder.
+    static func computeRMS(at url: URL) -> Float {
+        do {
+            let file = try AVAudioFile(forReading: url)
+            let format = file.processingFormat
+            let frameCount = AVAudioFrameCount(file.length)
+            guard frameCount > 0,
+                  let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frameCount)
+            else { return 0 }
+            try file.read(into: buffer)
+            guard let chan = buffer.floatChannelData?[0] else { return 0 }
+            let frames = Int(buffer.frameLength)
+            guard frames > 0 else { return 0 }
+            var sumSquares: Double = 0
+            for i in 0..<frames {
+                let v = Double(chan[i])
+                sumSquares += v * v
+            }
+            return Float((sumSquares / Double(frames)).squareRoot())
+        } catch {
+            return 0
+        }
     }
 
     func cancel() {

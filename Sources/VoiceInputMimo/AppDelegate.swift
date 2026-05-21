@@ -34,6 +34,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var contextAwareOutputMenuItem: NSMenuItem!
     private var asrServerMenuItem: NSMenuItem!
     private var asrServerStatusMenuItem: NSMenuItem!
+    private var microphoneMenuItem: NSMenuItem!
+    private var microphoneListenerToken: InputDeviceManager.ListenerToken?
     private lazy var settingsWindow = SettingsWindow()
     private lazy var clipboardHistoryWindow = ClipboardHistoryWindow()
     private lazy var modelMemoryWindow = ModelMemoryWindow()
@@ -73,6 +75,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         terminateConflictingApps()
         setupStatusBar()
         bootstrapPromptStore()
+        // Phantom-default detection runs after the UI is up so the alert
+        // (if any) has a parent window and the user sees it post-launch
+        // rather than blocking the splash. Skip in preview to keep smoke
+        // tests headless.
+        if !isPreviewMode {
+            Task { [weak self] in await self?.checkPhantomDefaultInput() }
+        }
 
         if ProcessInfo.processInfo.environment["VOICE_INPUT_MIMO_PREVIEW"] == "1" {
             installPreviewArchive()
@@ -269,6 +278,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         NSLog("[AppDelegate] will terminate preview=%@", isPreviewMode ? "YES" : "NO")
+        if let token = microphoneListenerToken {
+            InputDeviceManager.stopObserving(token)
+            microphoneListenerToken = nil
+        }
         if isPreviewMode { return }
         LocalASRServer.shared.stop()
     }
@@ -523,6 +536,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.stopPhaseTimer()
             self?.overlayPanel.transition(to: .error("Audio: \(msg)"))
         }
+        audioRecorder.onPostRecord = { url, rms in
+            NSLog("[Audio] post-record rms=%.6f file=%@", rms, url.lastPathComponent)
+            // RMS at the same magnitude we use for launch phantom detection.
+            // Surfacing silent recordings here would otherwise require the
+            // user to notice an empty ASR transcript.
+            if rms < 1e-4 {
+                NSLog("[Audio] WARNING recording appears silent — likely phantom input device")
+            }
+        }
     }
 
     // MARK: - Status bar
@@ -651,6 +673,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         asrItem.submenu = asrSubmenu
         menu.addItem(asrItem)
 
+        // Microphone submenu — displays current default input device and
+        // lets the user switch between input devices without going through
+        // System Settings (which can silently fail to apply, e.g. when a
+        // phantom device is stuck as default — see 2026-05-22 RCA).
+        let micItem = NSMenuItem(title: "Microphone", action: nil, keyEquivalent: "")
+        micItem.submenu = NSMenu()
+        microphoneMenuItem = micItem
+        menu.addItem(micItem)
+        refreshMicrophoneSubmenu()
+        microphoneListenerToken = InputDeviceManager.observeDefaultInputChanges { [weak self] in
+            self?.refreshMicrophoneSubmenu()
+        }
+
         menu.addItem(.separator())
 
         let settingsItem = NSMenuItem(title: "偏好設定...", action: #selector(openSettings), keyEquivalent: ",")
@@ -681,6 +716,144 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let name = recording ? "waveform.circle.fill" : "waveform.circle"
         button.image = NSImage(systemSymbolName: name, accessibilityDescription: "Voice Input MiMo")
         button.contentTintColor = recording ? .systemRed : nil
+    }
+
+    // MARK: - Microphone submenu
+
+    /// Rebuild the Microphone submenu from scratch on every refresh.
+    /// Cheaper than diffing for a list that's <10 items in practice and
+    /// avoids stale checkmarks when devices are added/removed externally.
+    private func refreshMicrophoneSubmenu() {
+        guard let submenu = microphoneMenuItem?.submenu else { return }
+        submenu.removeAllItems()
+
+        do {
+            let current = try InputDeviceManager.defaultInputDevice()
+            let devices = try InputDeviceManager.listInputDevices()
+
+            let currentTitle: String
+            if let c = current {
+                currentTitle = "Current: \(c.name)  ·  \(c.transportLabel)"
+            } else {
+                currentTitle = "Current: (none)"
+            }
+            let currentItem = NSMenuItem(title: currentTitle, action: nil, keyEquivalent: "")
+            currentItem.isEnabled = false
+            submenu.addItem(currentItem)
+            submenu.addItem(.separator())
+
+            for device in devices {
+                let item = NSMenuItem(
+                    title: "\(device.name)  ·  \(device.transportLabel)",
+                    action: #selector(selectMicrophoneDevice(_:)),
+                    keyEquivalent: ""
+                )
+                item.target = self
+                item.representedObject = device
+                item.state = (device.uid == current?.uid) ? .on : .off
+                submenu.addItem(item)
+            }
+
+            submenu.addItem(.separator())
+            let refreshItem = NSMenuItem(
+                title: "Refresh devices",
+                action: #selector(refreshMicrophoneSubmenuClicked),
+                keyEquivalent: ""
+            )
+            refreshItem.target = self
+            submenu.addItem(refreshItem)
+        } catch {
+            let errorItem = NSMenuItem(
+                title: "Error: \(error)",
+                action: nil,
+                keyEquivalent: ""
+            )
+            errorItem.isEnabled = false
+            submenu.addItem(errorItem)
+        }
+    }
+
+    @objc private func selectMicrophoneDevice(_ sender: NSMenuItem) {
+        guard let device = sender.representedObject as? InputDeviceManager.InputDevice else { return }
+        do {
+            try InputDeviceManager.setDefaultInputDevice(device)
+            // Property listener will fire and refresh the submenu, but
+            // refresh eagerly here so the checkmark moves immediately
+            // even if the listener is debounced by the system.
+            refreshMicrophoneSubmenu()
+        } catch {
+            NSLog("[Microphone] setDefault failed: %@", String(describing: error))
+            let alert = NSAlert()
+            alert.messageText = "Failed to switch input device"
+            alert.informativeText = String(describing: error)
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "OK")
+            alert.runModal()
+        }
+    }
+
+    @objc private func refreshMicrophoneSubmenuClicked() {
+        refreshMicrophoneSubmenu()
+    }
+
+    /// Threshold below which a 250 ms peek is treated as "phantom silent".
+    /// Picked from the 2026-05-22 incident: built-in mic ambient noise
+    /// measured RMS ≈ 0.002, phantom device measured RMS ≈ 1e-6. A
+    /// threshold of 1e-4 leaves two orders of magnitude of headroom on
+    /// each side.
+    private static let phantomRMSThreshold: Float = 1e-4
+
+    private func checkPhantomDefaultInput() async {
+        do {
+            guard let current = try InputDeviceManager.defaultInputDevice() else { return }
+            let rms = try await InputDeviceManager.peekDefaultRMS(durationMs: 250)
+            NSLog("[Microphone] launch peek default=%@ transport=%@ rms=%.6f",
+                  current.name, current.transportLabel, rms)
+            guard rms < Self.phantomRMSThreshold else { return }
+
+            let devices = (try? InputDeviceManager.listInputDevices()) ?? []
+            // Prefer a built-in input as the safe fallback. Falls back to
+            // any non-current device if no built-in exists.
+            let candidate = devices.first(where: { $0.uid != current.uid && $0.isBuiltIn })
+                ?? devices.first(where: { $0.uid != current.uid })
+
+            await MainActor.run { [weak self] in
+                self?.showPhantomDeviceAlert(current: current, candidate: candidate, peekRMS: rms)
+            }
+        } catch {
+            NSLog("[Microphone] launch peek failed: %@", String(describing: error))
+        }
+    }
+
+    private func showPhantomDeviceAlert(current: InputDeviceManager.InputDevice,
+                                        candidate: InputDeviceManager.InputDevice?,
+                                        peekRMS: Float) {
+        let alert = NSAlert()
+        alert.messageText = "Microphone seems silent"
+        alert.informativeText = """
+            Default input “\(current.name)” returned no signal in a 250 ms test capture (RMS = \(String(format: "%.6f", peekRMS))).
+
+            This usually means a previously-connected headset or USB mic is stuck as the system default — the same failure mode as the 2026-05-22 incident.
+            """
+        alert.alertStyle = .warning
+
+        guard let c = candidate else {
+            alert.addButton(withTitle: "OK")
+            _ = alert.runModal()
+            return
+        }
+
+        alert.addButton(withTitle: "Switch to “\(c.name)”")
+        alert.addButton(withTitle: "Ignore")
+        let response = alert.runModal()
+        guard response == .alertFirstButtonReturn else { return }
+        do {
+            try InputDeviceManager.setDefaultInputDevice(c)
+            refreshMicrophoneSubmenu()
+            NSLog("[Microphone] phantom auto-fix → %@", c.name)
+        } catch {
+            NSLog("[Microphone] auto-switch failed: %@", String(describing: error))
+        }
     }
 
     // MARK: - Actions

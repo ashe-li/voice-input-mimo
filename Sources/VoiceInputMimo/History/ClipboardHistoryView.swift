@@ -46,7 +46,9 @@ struct ClipboardHistoryView: View {
         HStack(spacing: 8) {
             Text("Clipboard History")
                 .font(.headline)
-            Text("\(vm.entries.count) entries")
+            Text(vm.isWindowed
+                 ? "\(vm.entries.count) entries · last \(vm.windowDays ?? 0) days"
+                 : "\(vm.entries.count) entries")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()

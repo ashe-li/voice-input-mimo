@@ -123,4 +123,53 @@ final class ClipboardArchiveTests: XCTestCase {
             """
         )
     }
+
+    // MARK: - Windowed parse (early exit)
+
+    private func iso(_ s: String) -> Date {
+        ISO8601DateFormatter().date(from: s)!
+    }
+
+    func testParseSinceStopsAtFirstOlderEntry() {
+        let raw = """
+        ─── 2026-05-27T10:00:00Z | session ───
+        recent
+
+        ─── 2026-05-20T10:00:00Z | clipboard ───
+        within window
+
+        ─── 2026-05-01T10:00:00Z | clipboard ───
+        cold
+
+        """
+        let entries = ClipboardArchive.parse(raw, since: iso("2026-05-13T00:00:00Z"))
+        XCTAssertEqual(entries.map(\.content), ["recent", "within window"])
+    }
+
+    func testParseSinceNilLoadsEverything() {
+        let raw = """
+        ─── 2026-05-27T10:00:00Z | session ───
+        a
+
+        ─── 2026-05-01T10:00:00Z | clipboard ───
+        b
+
+        """
+        XCTAssertEqual(ClipboardArchive.parse(raw, since: nil).count, 2)
+    }
+
+    func testParseSinceKeepsUnparseableTimestampAndDoesNotStop() {
+        // An unparseable header must not halt the scan, and the newer entry
+        // below it must still be reachable.
+        let raw = """
+        ─── not-a-timestamp | session ───
+        weird
+
+        ─── 2026-05-27T10:00:00Z | clipboard ───
+        recent
+
+        """
+        let entries = ClipboardArchive.parse(raw, since: iso("2026-05-13T00:00:00Z"))
+        XCTAssertEqual(entries.map(\.content), ["weird", "recent"])
+    }
 }

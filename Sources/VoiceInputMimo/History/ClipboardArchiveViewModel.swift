@@ -18,19 +18,23 @@ enum HistoryKindFilter: String, CaseIterable, Sendable {
 }
 
 /// Sidebar time bucket filter. Buckets are computed from each entry's
-/// ISO timestamp at filter time (not stored).
+/// ISO timestamp at filter time (not stored). `.recent` is the default and
+/// matches the loaded window; `.all` is the explicit "load everything,
+/// including cold" trigger.
 enum HistoryTimeBucket: String, CaseIterable, Sendable {
-    case all
+    case recent
     case today
     case yesterday
     case older
+    case all
 
     var label: String {
         switch self {
-        case .all: return "All Time"
+        case .recent: return "Last 2 weeks"
         case .today: return "Today"
         case .yesterday: return "Yesterday"
         case .older: return "Older"
+        case .all: return "All Time"
         }
     }
 }
@@ -46,6 +50,10 @@ struct HistoryEntryViewItem: Identifiable, Equatable, Sendable {
     /// Cross-reference to a `TraceEntry.id`. Set when this clipboard entry
     /// was produced by a recording session that wrote to TraceStore.
     let traceId: String?
+    /// Parsed once at construction. `ISO8601DateFormatter` is expensive, and
+    /// bucketing + clock labels touch every loaded entry on each filter change;
+    /// caching here keeps the History view responsive at thousands of entries.
+    let parsedDate: Date?
 
     init(
         index: Int,
@@ -59,6 +67,7 @@ struct HistoryEntryViewItem: Identifiable, Equatable, Sendable {
         self.kind = kind
         self.content = content
         self.traceId = traceId
+        self.parsedDate = Self.iso8601Parser.date(from: timestamp)
     }
 
     var id: String { "\(timestamp)|\(kind.rawValue)|\(index)" }
@@ -72,12 +81,8 @@ struct HistoryEntryViewItem: Identifiable, Equatable, Sendable {
     }
 
     var clockLabel: String {
-        guard let date = Self.iso8601Parser.date(from: timestamp) else { return timestamp }
+        guard let date = parsedDate else { return timestamp }
         return Self.clockFormatter.string(from: date)
-    }
-
-    fileprivate func parsedDate() -> Date? {
-        Self.iso8601Parser.date(from: timestamp)
     }
 
     private static let iso8601Parser = ISO8601DateFormatter()
@@ -93,10 +98,27 @@ struct HistoryEntryViewItem: Identifiable, Equatable, Sendable {
 /// in-memory fixture instead of touching the real archive file.
 protocol ClipboardArchiveProviding: AnyObject {
     func entries() -> [ClipboardArchive.Entry]
+    /// Windowed read: only entries at or newer than `cutoff`. `nil` = full set.
+    func entries(since cutoff: Date?) -> [ClipboardArchive.Entry]
     @discardableResult func restore(at index: Int) -> Bool
     @discardableResult func delete(at index: Int) -> Bool
     func clear()
     var archiveURL: URL { get }
+}
+
+extension ClipboardArchiveProviding {
+    /// Default in-memory windowing for fixtures. The real `ClipboardArchive`
+    /// overrides this with an early-exit parse that avoids scanning the tail.
+    /// Unparseable timestamps are kept so they stay reachable.
+    func entries(since cutoff: Date?) -> [ClipboardArchive.Entry] {
+        let all = entries()
+        guard let cutoff else { return all }
+        let parser = ISO8601DateFormatter()
+        return all.filter { entry in
+            guard let date = parser.date(from: entry.timestamp) else { return true }
+            return date >= cutoff
+        }
+    }
 }
 
 extension ClipboardArchive: ClipboardArchiveProviding {}
@@ -112,9 +134,31 @@ final class ClipboardArchiveViewModel {
     private(set) var bucketCounts: [HistoryTimeBucket: Int] = [:]
 
     var kindFilter: HistoryKindFilter = .all { didSet { recomputeFiltered() } }
-    var timeBucket: HistoryTimeBucket = .all { didSet { recomputeFiltered() } }
+    /// Defaults to `.recent` (the loaded window). Selecting `.all` while only a
+    /// window is loaded triggers a one-time cold load of the full archive, so
+    /// "All Time" never silently lies about showing everything.
+    var timeBucket: HistoryTimeBucket = .recent {
+        didSet {
+            if timeBucket == .all && isWindowed {
+                loadAllColdEntries()
+            } else {
+                recomputeFiltered()
+            }
+        }
+    }
     var selectedEntryID: String?
     private(set) var lastError: String?
+
+    /// Default load window in days. `reload()` only parses entries newer than
+    /// `now() - windowDays`; older entries stay cold until `loadAllColdEntries()`.
+    /// `nil` means the full cold archive is loaded.
+    nonisolated static let defaultWindowDays = 14
+    private(set) var windowDays: Int? = ClipboardArchiveViewModel.defaultWindowDays
+
+    /// True while a bounded window is loaded — i.e. older (cold) entries may
+    /// exist on disk but aren't loaded yet. The view shows a "Load older"
+    /// affordance based on this.
+    var isWindowed: Bool { windowDays != nil }
 
     /// `now` is injected so tests can pin "today" without time travel.
     var now: () -> Date = Date.init
@@ -133,8 +177,29 @@ final class ClipboardArchiveViewModel {
         self.archive = archive
     }
 
+    /// Cutoff for the current window, or `nil` when the full archive is loaded.
+    var windowCutoff: Date? {
+        guard let windowDays else { return nil }
+        return calendar.date(byAdding: .day, value: -windowDays, to: now())
+            ?? now().addingTimeInterval(-Double(windowDays) * 86_400)
+    }
+
+    /// Load the full cold archive (drops the window) and refresh. Triggered by
+    /// the "Load older" action in the History view.
+    func loadAllColdEntries() {
+        windowDays = nil
+        reload()
+    }
+
+    /// Reset back to the bounded default window (e.g. on next open). Mainly for
+    /// tests and future UI; not wired to a button today.
+    func resetWindow(days: Int? = ClipboardArchiveViewModel.defaultWindowDays) {
+        windowDays = days
+        reload()
+    }
+
     func reload() {
-        let raw = archive.entries()
+        let raw = archive.entries(since: windowCutoff)
         entries = raw.enumerated().map { idx, e in
             HistoryEntryViewItem(
                 index: idx,
@@ -202,17 +267,21 @@ final class ClipboardArchiveViewModel {
 
     private func recomputeCounts() {
         var kc: [HistoryKindFilter: Int] = [.all: entries.count, .session: 0, .clipboard: 0]
-        var bc: [HistoryTimeBucket: Int] = [.all: entries.count, .today: 0, .yesterday: 0, .older: 0]
+        var bc: [HistoryTimeBucket: Int] = [
+            .all: entries.count, .recent: 0, .today: 0, .yesterday: 0, .older: 0
+        ]
+        let cutoff = recentCutoff
         for item in entries {
             switch item.kind {
             case .session: kc[.session, default: 0] += 1
             case .clipboard: kc[.clipboard, default: 0] += 1
             }
+            if isRecent(item, cutoff: cutoff) { bc[.recent, default: 0] += 1 }
             switch dayBucket(for: item) {
             case .today: bc[.today, default: 0] += 1
             case .yesterday: bc[.yesterday, default: 0] += 1
             case .older: bc[.older, default: 0] += 1
-            case .all: break
+            case .recent, .all: break
             }
         }
         kindCounts = kc
@@ -230,13 +299,32 @@ final class ClipboardArchiveViewModel {
     }
 
     private func matchesBucket(_ item: HistoryEntryViewItem) -> Bool {
-        timeBucket == .all || dayBucket(for: item) == timeBucket
+        switch timeBucket {
+        case .all: return true
+        case .recent: return isRecent(item, cutoff: recentCutoff)
+        case .today, .yesterday, .older: return dayBucket(for: item) == timeBucket
+        }
+    }
+
+    /// `.recent` cutoff is always the default window back from `now`, even after
+    /// the cold archive is loaded — so switching to "All Time" and back to
+    /// "Last 2 weeks" filters in place without re-windowing the load.
+    private var recentCutoff: Date {
+        calendar.date(byAdding: .day, value: -Self.defaultWindowDays, to: now())
+            ?? now().addingTimeInterval(-Double(Self.defaultWindowDays) * 86_400)
+    }
+
+    /// Entries with an unparseable timestamp are not "recent" (they sort into
+    /// `.older` / `.all`), matching `dayBucket`'s fallback.
+    private func isRecent(_ item: HistoryEntryViewItem, cutoff: Date) -> Bool {
+        guard let date = item.parsedDate else { return false }
+        return date >= cutoff
     }
 
     /// Bucket for `item` against the injected clock + calendar. Unparseable
     /// timestamps fall into `.older` so the entry stays reachable.
     private func dayBucket(for item: HistoryEntryViewItem) -> HistoryTimeBucket {
-        guard let date = item.parsedDate() else { return .older }
+        guard let date = item.parsedDate else { return .older }
         let nowDate = now()
         if calendar.isDate(date, inSameDayAs: nowDate) { return .today }
         if let yesterday = calendar.date(byAdding: .day, value: -1, to: nowDate),

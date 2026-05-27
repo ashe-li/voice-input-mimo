@@ -249,23 +249,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let path = ProcessInfo.processInfo.environment["VOICE_INPUT_MIMO_ARCHIVE_PATH"]
             ?? "\(NSTemporaryDirectory())voice-input-mimo-preview-archive.txt"
         let url = URL(fileURLWithPath: path)
+        // Timestamps are relative to now so the preview always straddles the
+        // History view's default load window (last 14 days): the first two
+        // entries load by default, the older two stay cold behind "Load older".
+        let iso = ISO8601DateFormatter()
+        let now = Date()
+        func stamp(daysAgo: Double) -> String {
+            iso.string(from: now.addingTimeInterval(-daysAgo * 86_400))
+        }
         let sample = """
-        ─── 2026-05-09T05:40:00Z | session ───
+        ─── \(stamp(daysAgo: 0.04)) | session ───
         Chinese (ASR)
         請把 clipboard history 修成真的清單，並且每次 session 都保留中文原文。
 
         English / Output
         Fix the clipboard history so it shows a real list, and preserve the Chinese source text for every session.
 
-        ─── 2026-05-09T05:38:00Z | session ───
+        ─── \(stamp(daysAgo: 3)) | clipboard ───
+        Previous clipboard content before VoiceInputMimo pasted output.
+
+        ─── \(stamp(daysAgo: 20)) | session ───
         Chinese (ASR)
-        這個模式關掉以後應該會只貼中文 ASR 原文。
+        這是一個比較久以前的 session，預設不載入，要按 Load older 才看得到。
 
         English / Output
-        When this mode is off, paste only the Chinese ASR transcript.
+        This is an older session — it stays cold by default until you tap Load older.
 
-        ─── 2026-05-09T05:35:00Z | clipboard ───
-        Previous clipboard content before VoiceInputMimo pasted output.
+        ─── \(stamp(daysAgo: 40)) | clipboard ───
+        A much older clipboard snapshot, well outside the default window.
 
         """
         try? FileManager.default.createDirectory(

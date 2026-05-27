@@ -1,6 +1,12 @@
 import XCTest
 @testable import VoiceInputMimo
 
+/// File-scope so it can be used inside `vm.now` closures without an implicit
+/// `self` capture.
+private func iso(_ s: String) -> Date {
+    ISO8601DateFormatter().date(from: s)!
+}
+
 @MainActor
 final class ClipboardArchiveViewModelTests: XCTestCase {
     func test_initialState_isEmpty() {
@@ -9,7 +15,7 @@ final class ClipboardArchiveViewModelTests: XCTestCase {
         XCTAssertTrue(vm.entries.isEmpty)
         XCTAssertTrue(vm.filteredEntries.isEmpty)
         XCTAssertEqual(vm.kindFilter, .all)
-        XCTAssertEqual(vm.timeBucket, .all)
+        XCTAssertEqual(vm.timeBucket, .recent)
         XCTAssertNil(vm.selectedEntryID)
     }
 
@@ -19,6 +25,7 @@ final class ClipboardArchiveViewModelTests: XCTestCase {
             entry("2026-05-10T09:00:00Z", .clipboard, "world")
         ])
         let vm = ClipboardArchiveViewModel(archive: archive)
+        vm.now = { iso("2026-05-10T11:00:00Z") }
         vm.reload()
         XCTAssertEqual(vm.entries.count, 2)
         XCTAssertEqual(vm.selectedEntry?.content, "hello")
@@ -30,6 +37,7 @@ final class ClipboardArchiveViewModelTests: XCTestCase {
             entry("2026-05-10T09:00:00Z", .clipboard, "copy")
         ])
         let vm = ClipboardArchiveViewModel(archive: archive)
+        vm.now = { iso("2026-05-10T11:00:00Z") }
         vm.reload()
 
         vm.kindFilter = .session
@@ -108,6 +116,7 @@ final class ClipboardArchiveViewModelTests: XCTestCase {
             entry("2026-05-10T10:00:00Z", .session, "hello")
         ])
         let vm = ClipboardArchiveViewModel(archive: archive)
+        vm.now = { iso("2026-05-10T11:00:00Z") }
         vm.reload()
         let item = vm.entries.first!
         XCTAssertTrue(vm.restore(item))
@@ -120,6 +129,7 @@ final class ClipboardArchiveViewModelTests: XCTestCase {
             entry("2026-05-10T09:00:00Z", .clipboard, "b")
         ])
         let vm = ClipboardArchiveViewModel(archive: archive)
+        vm.now = { iso("2026-05-10T11:00:00Z") }
         vm.reload()
         let first = vm.entries.first!
         vm.delete(first)
@@ -132,6 +142,7 @@ final class ClipboardArchiveViewModelTests: XCTestCase {
             entry("2026-05-10T10:00:00Z", .session, "a")
         ])
         let vm = ClipboardArchiveViewModel(archive: archive)
+        vm.now = { iso("2026-05-10T11:00:00Z") }
         vm.reload()
         vm.clearAll()
         XCTAssertTrue(vm.entries.isEmpty)
@@ -152,6 +163,7 @@ final class ClipboardArchiveViewModelTests: XCTestCase {
             )
         ])
         let vm = ClipboardArchiveViewModel(archive: archive)
+        vm.now = { iso("2026-05-14T11:00:00Z") }
         vm.reload()
         XCTAssertEqual(vm.entries[0].traceId, "trace-abc12345")
         XCTAssertNil(vm.entries[1].traceId)
@@ -167,6 +179,92 @@ final class ClipboardArchiveViewModelTests: XCTestCase {
         XCTAssertEqual(vm.filteredEntries.count, 1)
         vm.timeBucket = .today
         XCTAssertEqual(vm.filteredEntries.count, 0)
+    }
+
+    // MARK: - Windowing (default 2-week load + cold load on demand)
+
+    func test_reload_defaultWindow_loadsOnlyRecentEntries() {
+        let archive = MockClipboardArchive(entries: [
+            entry("2026-05-27T08:00:00Z", .session, "recent"),
+            entry("2026-05-20T08:00:00Z", .clipboard, "within window"),
+            entry("2026-05-01T08:00:00Z", .clipboard, "cold"),
+            entry("2026-04-01T08:00:00Z", .session, "very cold")
+        ])
+        let vm = ClipboardArchiveViewModel(archive: archive)
+        vm.now = { iso("2026-05-27T20:00:00Z") }
+        vm.reload()
+        // Default 14-day window cuts off at 2026-05-13.
+        XCTAssertTrue(vm.isWindowed)
+        XCTAssertEqual(vm.entries.map(\.content), ["recent", "within window"])
+    }
+
+    func test_loadAllColdEntries_loadsEverything_andClearsWindow() {
+        let archive = MockClipboardArchive(entries: [
+            entry("2026-05-27T08:00:00Z", .session, "recent"),
+            entry("2026-05-01T08:00:00Z", .clipboard, "cold"),
+            entry("2026-04-01T08:00:00Z", .session, "very cold")
+        ])
+        let vm = ClipboardArchiveViewModel(archive: archive)
+        vm.now = { iso("2026-05-27T20:00:00Z") }
+        vm.reload()
+        XCTAssertEqual(vm.entries.count, 1)
+
+        vm.loadAllColdEntries()
+        XCTAssertFalse(vm.isWindowed)
+        XCTAssertEqual(vm.entries.count, 3)
+        XCTAssertEqual(vm.count(forKind: .all), 3)
+    }
+
+    func test_defaultBucket_recent_hidesColdWithinLoadedSet() {
+        // Even if the loaded set somehow contains an older entry, the default
+        // `.recent` filter must not surface it — the user's complaint that the
+        // default still showed "All".
+        let archive = MockClipboardArchive(entries: [
+            entry("2026-05-27T08:00:00Z", .session, "recent"),
+            entry("2026-05-01T08:00:00Z", .clipboard, "old")
+        ])
+        let vm = ClipboardArchiveViewModel(archive: archive)
+        vm.now = { iso("2026-05-27T20:00:00Z") }
+        vm.loadAllColdEntries()           // full set loaded (both entries)
+        vm.timeBucket = .recent           // but default filter is recent-only
+        XCTAssertEqual(vm.filteredEntries.map(\.content), ["recent"])
+        XCTAssertEqual(vm.count(forBucket: .recent), 1)
+    }
+
+    func test_selectingAllTime_triggersColdLoad() {
+        let archive = MockClipboardArchive(entries: [
+            entry("2026-05-27T08:00:00Z", .session, "recent"),
+            entry("2026-05-01T08:00:00Z", .clipboard, "cold")
+        ])
+        let vm = ClipboardArchiveViewModel(archive: archive)
+        vm.now = { iso("2026-05-27T20:00:00Z") }
+        vm.reload()
+        XCTAssertEqual(vm.entries.count, 1)   // windowed: only recent
+        XCTAssertTrue(vm.isWindowed)
+
+        vm.timeBucket = .all                  // "All Time" loads everything
+        XCTAssertFalse(vm.isWindowed)
+        XCTAssertEqual(vm.filteredEntries.count, 2)
+    }
+
+    func test_windowCutoff_nilWhenColdLoaded() {
+        let vm = ClipboardArchiveViewModel(archive: MockClipboardArchive())
+        XCTAssertNotNil(vm.windowCutoff)
+        vm.loadAllColdEntries()
+        XCTAssertNil(vm.windowCutoff)
+    }
+
+    func test_parsedDate_isCachedOnViewItem() {
+        let item = HistoryEntryViewItem(
+            index: 0,
+            timestamp: "2026-05-14T10:00:00Z",
+            kind: .session,
+            content: "x"
+        )
+        XCTAssertEqual(item.parsedDate, iso("2026-05-14T10:00:00Z"))
+        let bad = HistoryEntryViewItem(index: 0, timestamp: "nope", kind: .session, content: "x")
+        XCTAssertNil(bad.parsedDate)
+        XCTAssertEqual(bad.clockLabel, "nope")
     }
 
     // MARK: - Helpers

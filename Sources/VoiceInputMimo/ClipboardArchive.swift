@@ -124,10 +124,22 @@ final class ClipboardArchive {
 
     /// Parse archive into newest-first entries.
     func entries() -> [Entry] {
+        entries(since: nil)
+    }
+
+    /// Windowed read. When `cutoff` is non-nil, parsing stops at the first
+    /// entry older than `cutoff` — because the file is strictly newest-first,
+    /// everything below it is older too, so the tail never gets scanned. This
+    /// is what keeps the History view fast: the default window loads only
+    /// recent entries instead of the whole (up to 1 MB) file. Pass `nil` to
+    /// load the full cold archive on demand. Entries with an unparseable
+    /// timestamp are kept (they stay reachable) and never trigger the early
+    /// stop.
+    func entries(since cutoff: Date?) -> [Entry] {
         guard let raw = try? String(contentsOf: archiveURL, encoding: .utf8), !raw.isEmpty else {
             return []
         }
-        return Self.parse(raw)
+        return Self.parse(raw, since: cutoff)
     }
 
     /// Reverse lookup: find the clipboard entry produced by the given trace.
@@ -179,9 +191,21 @@ final class ClipboardArchive {
 
     // MARK: - Parsing
 
+    /// ISO8601 parser reused across the early-exit window check. Allocating
+    /// `ISO8601DateFormatter` is expensive, so we keep one static instance.
+    private static let windowParser = ISO8601DateFormatter()
+
     /// Parse the on-disk format into entries. Each entry starts with `─── ISO ─── \n`,
     /// then content, terminated by `\n\n` followed by the next separator (or EOF).
     static func parse(_ raw: String) -> [Entry] {
+        parse(raw, since: nil)
+    }
+
+    /// Early-exit variant. When `cutoff` is non-nil, stops parsing once an
+    /// entry older than `cutoff` is reached (entries are newest-first, so the
+    /// remainder is older). Unparseable timestamps are included and do not
+    /// stop the scan.
+    static func parse(_ raw: String, since cutoff: Date?) -> [Entry] {
         // Pattern for header: ─── <stamp> ─── newline
         // Stamp is ISO8601 (no embedded separator chars).
         let headerPrefix = "\(separator)"
@@ -212,6 +236,12 @@ final class ClipboardArchive {
                 contentEnd = nextHeader.lowerBound
             } else {
                 contentEnd = raw.endIndex
+            }
+
+            // Early exit: once we reach an entry older than the window cutoff,
+            // every later entry is older too (newest-first), so stop scanning.
+            if let cutoff, let date = windowParser.date(from: stamp), date < cutoff {
+                break
             }
 
             var content = String(raw[contentStart..<contentEnd])

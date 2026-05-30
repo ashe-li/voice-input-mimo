@@ -222,7 +222,11 @@ async def lifespan(app: FastAPI):
         f"hard_ceiling={IDLE_HARD_CEILING:.0f}s "
         f"qwen_manager={'on' if qwen_manager else 'off'}"
     )
-    if os.environ.get("ENGINE_PRELOAD", "0") == "1":
+    # Accept MIMO_PRELOAD as a fallback: the Swift host (LocalASRServer) passes
+    # the Settings "Preload" toggle as MIMO_PRELOAD, but this gate previously
+    # only read ENGINE_PRELOAD — so the toggle was a dead switch and the engine
+    # always lazy-loaded. Honour either name.
+    if os.environ.get("ENGINE_PRELOAD", os.environ.get("MIMO_PRELOAD", "0")) == "1":
         await asr_model.warmup()
     try:
         yield

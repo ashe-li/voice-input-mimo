@@ -218,6 +218,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
+    /// When ASR last ran a real inference (engine warm). Drives `prewarmIfStale()`
+    /// so active-use recordings don't redundantly re-warm.
+    private var lastASRActivityAt: Date?
+
+    /// The engine's first idle-eviction step is 180s; warming at 90s catches the
+    /// already-evicted case and pre-empts an imminent eviction.
+    private static let prewarmIfIdleSeconds: Double = 90
+
+    /// KB lazy-model mitigation #1: app-side prewarm at record-start. Fires the
+    /// fire-and-forget silence warmup in parallel with recording so a long-idle
+    /// first recording is already warm by the time the user releases — masking
+    /// the cold-load behind the recording rather than paying it after. No-op
+    /// when recently active, so rapid successive recordings don't double-hit.
+    private func prewarmIfStale() {
+        let stale = lastASRActivityAt
+            .map { Date().timeIntervalSince($0) > Self.prewarmIfIdleSeconds } ?? true
+        guard stale else { return }
+        warmUpASR()
+    }
+
     /// Idempotent: once `prompts/active.json` exists `bootstrapIfNeeded`
     /// short-circuits, so this is safe to call on every launch.
     private func bootstrapPromptStore() {
@@ -336,6 +356,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSSound(named: .init("Tink"))?.play()
 
         audioRecorder.startRecording()
+        // Cold-load mitigation (KB lazy-model #1): warm the engine in parallel
+        // with this recording so a long-idle first recording is already warm by
+        // fnUp, masking the ~2.3s cold-load behind the recording window.
+        prewarmIfStale()
     }
 
     private func fnUp() {
@@ -1309,6 +1333,9 @@ extension AppDelegate: JobRunner {
             self?.stopPhaseTimer()
             switch result {
             case .success(let asrResult):
+                // Engine ran inference → warm. Stamp so the next record-start
+                // prewarm is skipped unless we go idle again.
+                self?.lastASRActivityAt = Date()
                 let trimmed = asrResult.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 if trimmed.isEmpty {
                     completion(.failure(JobPipelineError.emptyTranscript))

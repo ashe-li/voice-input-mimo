@@ -392,7 +392,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // requeued earlier segment (from interruptForNewSegment) resumes
         // afterwards.
         overlayPanel.transition(to: .transcribing(elapsed: 0))
-        startPhaseTimer { .transcribing(elapsed: $0) }
+        // Cold-load UX: warm transcription (fnUp→ASR) lands in ~0.7s. If we
+        // cross the 1s budget the model is almost certainly cold-loading after
+        // idle eviction (an accepted trade-off — KB
+        // lazy-model-idle-eviction-cold-tax-tradeoff). We can't speed up the
+        // cold path here, but relabel so the longer first-after-idle wait reads
+        // as model loading, not a hang.
+        startPhaseTimer { elapsed in
+            elapsed >= Self.coldLoadHintAfterSeconds
+                ? .modelLoading(elapsed: elapsed)
+                : .transcribing(elapsed: elapsed)
+        }
         jobQueue.enqueueHead(job)
     }
 
@@ -516,6 +526,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Phase progress timer
+
+    /// Warm transcription (fnUp→ASR) is ~0.7s. Past this, the wait is almost
+    /// certainly model cold-load (idle-eviction tax) — the overlay relabels to
+    /// "Loading model…" so the longer first-after-idle delay isn't read as a hang.
+    private static let coldLoadHintAfterSeconds: Double = 1.0
 
     private func startPhaseTimer(builder: @escaping (Double) -> OverlayPanel.Phase) {
         stopPhaseTimer()

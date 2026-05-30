@@ -157,6 +157,22 @@ final class OverlayPanelTests: XCTestCase {
         XCTAssertTrue(panel.debug_enText.contains("Default Refine"))
     }
 
+    /// `.modelLoading` relabels the wait as model cold-load but stays a
+    /// single-line, animating, non-auto-dismissing status frame (same shape as
+    /// `.transcribing`). Pins the label + the "no spurious dismiss" contract so
+    /// the cold-load hint can't silently start vanishing mid-load.
+    func testModelLoadingShowsLoadingLabelAndDoesNotAutoDismiss() {
+        let panel = OverlayPanel()
+        panel.transition(to: .modelLoading(elapsed: 2.3))
+
+        XCTAssertTrue(panel.debug_zhHidden, "modelLoading is single-line")
+        XCTAssertEqual(panel.debug_enText, "Loading model… 2.3s")
+        XCTAssertTrue(panel.debug_animating,
+            "modelLoading keeps the waveform animating to signal work in flight")
+        XCTAssertFalse(panel.debug_hasPendingDismiss,
+            "an active (in-flight) phase must never arm an auto-dismiss")
+    }
+
     /// `.zhReady` renders bare ZH (no "Chinese ready:" prefix) and keeps
     /// the waveform animating. The translation flow holds this state for
     /// the entire LLM latency — animating waveform is the only "still

@@ -1320,6 +1320,42 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// DispatchQueue.main.async before invoking completion handlers).
 extension AppDelegate: JobRunner {
     func runASR(_ job: RecordingJob, completion: @escaping (Result<String, Error>) -> Void) {
+        // Guard #1 — empty / near-empty capture. Don't POST: the engine 500s on a
+        // zero-length file. Treat as "No speech detected" and drop the orphan tmp
+        // wav (transcribe would normally archive+remove it; an empty clip is not
+        // worth keeping). Threshold logic lives in ASRAudioGuard (unit tested).
+        if ASRAudioGuard.isEffectivelyEmpty(at: job.wavURL) {
+            NSLog("[AppDelegate] ASR skipped (job=%@): audio effectively empty", job.id.uuidString)
+            try? FileManager.default.removeItem(at: job.wavURL)
+            completion(.failure(JobPipelineError.emptyTranscript))
+            return
+        }
+        // Guard #2 — make sure the ASR sidecar is actually up before transcribing.
+        // The sidecar being down / never-started (trace log: ~56 "could not
+        // connect" / 502) is the single biggest failure class. Auto-(re)start it
+        // here so the user no longer has to manually restart and re-record several
+        // times. The spawn (≤30 s, typically ~3 s) is masked by the modelLoading
+        // overlay the phase timer already shows. The gateway (:4000) is not ours
+        // to start — if that is what's down, transcribeJob surfaces an actionable
+        // message rather than a raw URLError.
+        ensureSidecarReachable { [weak self] in
+            self?.transcribeJob(job, completion: completion)
+        }
+    }
+
+    /// Ensure the local ASR sidecar is running, then run `then`. Happy path
+    /// (already `.running`) calls straight through with no probe. Otherwise we
+    /// adopt-or-spawn via LocalASRServer and proceed regardless of the outcome —
+    /// transcribeJob maps any lingering connection failure to a friendly message.
+    private func ensureSidecarReachable(_ then: @escaping () -> Void) {
+        if case .running = LocalASRServer.shared.state {
+            then()
+            return
+        }
+        LocalASRServer.shared.start { _ in then() }
+    }
+
+    private func transcribeJob(_ job: RecordingJob, completion: @escaping (Result<String, Error>) -> Void) {
         ASRClient.shared.transcribe(
             wavURL: job.wavURL,
             onArchived: { archivedURL in
@@ -1346,7 +1382,15 @@ extension AppDelegate: JobRunner {
             case .failure(let error):
                 NSLog("[AppDelegate] ASR failed (job=%@): %@",
                       job.id.uuidString, error.localizedDescription)
-                completion(.failure(error))
+                // Map raw URLSession / gateway errors to actionable overlay text
+                // instead of a raw 502 body or NSURLError (ASRFailureClassifier
+                // is unit tested). Unrecognised errors flow through unchanged.
+                switch ASRFailureClassifier.classify(error) {
+                case .emptyTranscript:    completion(.failure(JobPipelineError.emptyTranscript))
+                case .backendUnreachable: completion(.failure(JobPipelineError.backendUnreachable))
+                case .backendNotReady:    completion(.failure(JobPipelineError.backendNotReady))
+                case .passthrough:        completion(.failure(error))
+                }
             }
         }
     }
@@ -1487,14 +1531,22 @@ extension AppDelegate: JobRunner {
 }
 
 /// Pipeline-internal failure modes that need a friendly user-facing message
-/// (instead of the raw `NSError` description). Empty transcript is the only
-/// one for now — gateway / network errors flow through unchanged.
+/// (instead of the raw `NSError` / gateway-body description). Raw errors that
+/// don't map to one of these still flow through `handleJobFailure` unchanged.
 private enum JobPipelineError: LocalizedError {
     case emptyTranscript
+    /// Couldn't reach the gateway at all (:4000 down) — not something the app can
+    /// auto-start, so point the user at the backend.
+    case backendUnreachable
+    /// Gateway up but the ASR sidecar isn't serving yet (502/503/504); the app
+    /// has already tried to (re)start it, so a retry usually succeeds.
+    case backendNotReady
 
     var userMessage: String {
         switch self {
         case .emptyTranscript: return "No speech detected"
+        case .backendUnreachable: return "ASR 服務未啟動（gateway :4000 連不上），請先啟動 local-llm-backend"
+        case .backendNotReady: return "ASR 引擎重啟中，請稍候再按一次"
         }
     }
 

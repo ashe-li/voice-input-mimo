@@ -204,9 +204,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// silently NSLogs (sidecar/gateway may be down at launch — user gets the
     /// real error on first manual recording).
     private func warmUpASR() {
-        ASRClient.shared.smokeTranscribe { result in
+        ASRClient.shared.smokeTranscribe { [weak self] result in
             switch result {
             case .success(let r):
+                // Warmup ran a real (silence) inference → engine is hot. Stamp the
+                // freshness clock so prewarmIfStale() doesn't schedule a redundant
+                // smokeTranscribe on the next recording within the idle window.
+                self?.lastASRActivityAt = Date()
                 NSLog(
                     "[AppDelegate] ASR warmup done: elapsed=%dms wasCold=%@",
                     r.elapsedMs,
@@ -216,6 +220,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 NSLog("[AppDelegate] ASR warmup failed: %@", err.localizedDescription)
             }
         }
+    }
+
+    /// When ASR last ran a real inference (engine warm). Drives `prewarmIfStale()`
+    /// so active-use recordings don't redundantly re-warm.
+    private var lastASRActivityAt: Date?
+
+    /// The engine's first idle-eviction step is 180s; warming at 90s catches the
+    /// already-evicted case and pre-empts an imminent eviction.
+    private static let prewarmIfIdleSeconds: Double = 90
+
+    /// KB lazy-model mitigation #1: app-side prewarm at record-start. Fires the
+    /// fire-and-forget silence warmup in parallel with recording so a long-idle
+    /// first recording is already warm by the time the user releases — masking
+    /// the cold-load behind the recording rather than paying it after. No-op
+    /// when recently active, so rapid successive recordings don't double-hit.
+    private func prewarmIfStale() {
+        let stale = lastASRActivityAt
+            .map { Date().timeIntervalSince($0) > Self.prewarmIfIdleSeconds } ?? true
+        guard stale else { return }
+        warmUpASR()
     }
 
     /// Idempotent: once `prompts/active.json` exists `bootstrapIfNeeded`
@@ -336,6 +360,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSSound(named: .init("Tink"))?.play()
 
         audioRecorder.startRecording()
+        // Cold-load mitigation (KB lazy-model #1): warm the engine in parallel
+        // with this recording so a long-idle first recording is already warm by
+        // fnUp, masking the ~2.3s cold-load behind the recording window.
+        prewarmIfStale()
     }
 
     private func fnUp() {
@@ -392,7 +420,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // requeued earlier segment (from interruptForNewSegment) resumes
         // afterwards.
         overlayPanel.transition(to: .transcribing(elapsed: 0))
-        startPhaseTimer { .transcribing(elapsed: $0) }
+        // Cold-load UX: warm transcription (fnUp→ASR) lands in ~0.7s. If we
+        // cross the 1s budget the model is almost certainly cold-loading after
+        // idle eviction (an accepted trade-off — KB
+        // lazy-model-idle-eviction-cold-tax-tradeoff). We can't speed up the
+        // cold path here, but relabel so the longer first-after-idle wait reads
+        // as model loading, not a hang.
+        startPhaseTimer { elapsed in
+            elapsed >= Self.coldLoadHintAfterSeconds
+                ? .modelLoading(elapsed: elapsed)
+                : .transcribing(elapsed: elapsed)
+        }
         jobQueue.enqueueHead(job)
     }
 
@@ -516,6 +554,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - Phase progress timer
+
+    /// Warm transcription (fnUp→ASR) is ~0.7s. Past this, the wait is almost
+    /// certainly model cold-load (idle-eviction tax) — the overlay relabels to
+    /// "Loading model…" so the longer first-after-idle delay isn't read as a hang.
+    private static let coldLoadHintAfterSeconds: Double = 1.0
 
     private func startPhaseTimer(builder: @escaping (Double) -> OverlayPanel.Phase) {
         stopPhaseTimer()
@@ -1281,6 +1324,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 /// DispatchQueue.main.async before invoking completion handlers).
 extension AppDelegate: JobRunner {
     func runASR(_ job: RecordingJob, completion: @escaping (Result<String, Error>) -> Void) {
+        // Guard #1 — empty / near-empty capture. Don't POST: the engine 500s on a
+        // zero-length file. Treat as "No speech detected" and drop the orphan tmp
+        // wav (transcribe would normally archive+remove it; an empty clip is not
+        // worth keeping). Threshold logic lives in ASRAudioGuard (unit tested).
+        if ASRAudioGuard.isEffectivelyEmpty(at: job.wavURL) {
+            NSLog("[AppDelegate] ASR skipped (job=%@): audio effectively empty", job.id.uuidString)
+            try? FileManager.default.removeItem(at: job.wavURL)
+            completion(.failure(JobPipelineError.emptyTranscript))
+            return
+        }
+        // Guard #2 — make sure the ASR sidecar is actually up before transcribing.
+        // The sidecar being down / never-started (trace log: ~56 "could not
+        // connect" / 502) is the single biggest failure class. Auto-(re)start it
+        // here so the user no longer has to manually restart and re-record several
+        // times. The spawn (≤30 s, typically ~3 s) is masked by the modelLoading
+        // overlay the phase timer already shows.
+        ensureSidecarReachable { [weak self] result in
+            switch result {
+            case .success:
+                self?.transcribeJob(job, completion: completion)
+            case .failure(let startError):
+                // The sidecar couldn't be (re)started for a concrete reason — bad
+                // config (python/server.py missing), spawn failure, or health
+                // timeout. Surface THAT instead of letting transcribeJob fail with
+                // a generic gateway error that hides the real cause. Stop the phase
+                // timer first so handleJobFailure's .error overlay isn't stomped by
+                // the next modelLoading tick.
+                self?.stopPhaseTimer()
+                NSLog("[AppDelegate] ASR sidecar start failed (job=%@): %@",
+                      job.id.uuidString, startError.localizedDescription)
+                completion(.failure(JobPipelineError.sidecarStartFailed(startError.localizedDescription)))
+            }
+        }
+    }
+
+    /// Ensure the local ASR sidecar is running, then report the outcome. Happy
+    /// path (already `.running`) reports success straight away with no probe.
+    /// Otherwise we adopt-or-spawn via LocalASRServer and propagate its result so
+    /// the caller can surface a concrete startup failure rather than a later
+    /// generic connection error.
+    private func ensureSidecarReachable(_ completion: @escaping (Result<Void, Error>) -> Void) {
+        if case .running = LocalASRServer.shared.state {
+            completion(.success(()))
+            return
+        }
+        LocalASRServer.shared.start(completion: completion)
+    }
+
+    private func transcribeJob(_ job: RecordingJob, completion: @escaping (Result<String, Error>) -> Void) {
         ASRClient.shared.transcribe(
             wavURL: job.wavURL,
             onArchived: { archivedURL in
@@ -1294,6 +1386,9 @@ extension AppDelegate: JobRunner {
             self?.stopPhaseTimer()
             switch result {
             case .success(let asrResult):
+                // Engine ran inference → warm. Stamp so the next record-start
+                // prewarm is skipped unless we go idle again.
+                self?.lastASRActivityAt = Date()
                 let trimmed = asrResult.text.trimmingCharacters(in: .whitespacesAndNewlines)
                 if trimmed.isEmpty {
                     completion(.failure(JobPipelineError.emptyTranscript))
@@ -1304,7 +1399,15 @@ extension AppDelegate: JobRunner {
             case .failure(let error):
                 NSLog("[AppDelegate] ASR failed (job=%@): %@",
                       job.id.uuidString, error.localizedDescription)
-                completion(.failure(error))
+                // Map raw URLSession / gateway errors to actionable overlay text
+                // instead of a raw 502 body or NSURLError (ASRFailureClassifier
+                // is unit tested). Unrecognised errors flow through unchanged.
+                switch ASRFailureClassifier.classify(error) {
+                case .emptyTranscript:    completion(.failure(JobPipelineError.emptyTranscript))
+                case .backendUnreachable: completion(.failure(JobPipelineError.backendUnreachable))
+                case .backendNotReady:    completion(.failure(JobPipelineError.backendNotReady))
+                case .passthrough:        completion(.failure(error))
+                }
             }
         }
     }
@@ -1445,14 +1548,27 @@ extension AppDelegate: JobRunner {
 }
 
 /// Pipeline-internal failure modes that need a friendly user-facing message
-/// (instead of the raw `NSError` description). Empty transcript is the only
-/// one for now — gateway / network errors flow through unchanged.
+/// (instead of the raw `NSError` / gateway-body description). Raw errors that
+/// don't map to one of these still flow through `handleJobFailure` unchanged.
 private enum JobPipelineError: LocalizedError {
     case emptyTranscript
+    /// Couldn't reach the gateway at all (:4000 down) — not something the app can
+    /// auto-start, so point the user at the backend.
+    case backendUnreachable
+    /// Gateway up but the ASR sidecar isn't serving yet (502/503/504); the app
+    /// has already tried to (re)start it, so a retry usually succeeds.
+    case backendNotReady
+    /// The app tried to auto-(re)start the sidecar and that failed outright
+    /// (bad config / spawn / health timeout). Carries the concrete cause so the
+    /// user sees what to fix rather than a generic connection error.
+    case sidecarStartFailed(String)
 
     var userMessage: String {
         switch self {
         case .emptyTranscript: return "No speech detected"
+        case .backendUnreachable: return "ASR 服務未啟動（gateway :4000 連不上），請先啟動 local-llm-backend"
+        case .backendNotReady: return "ASR 引擎重啟中，請稍候再按一次"
+        case .sidecarStartFailed(let detail): return "ASR 引擎啟動失敗：\(detail)"
         }
     }
 

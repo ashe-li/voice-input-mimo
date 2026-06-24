@@ -6,6 +6,13 @@ final class OverlayPanel: NSPanel {
     enum Phase {
         case recording(elapsed: Double)
         case transcribing(elapsed: Double)
+        /// Shown when transcription crosses the warm-path budget (~1s): the
+        /// model is almost certainly cold-loading after idle eviction (an
+        /// accepted trade-off — see KB lazy-model-idle-eviction-cold-tax-tradeoff).
+        /// Relabels the wait so the first-after-idle delay reads as model
+        /// loading, not a hang. Renders like `.transcribing` (single line,
+        /// animating waveform), just a different label.
+        case modelLoading(elapsed: Double)
         case zhReady(zh: String)
         case refining(zh: String, elapsed: Double, translating: Bool, profileLabel: String?)
         /// `translating` distinguishes "中翻英" (two-line ZH+EN display) from
@@ -149,6 +156,8 @@ final class OverlayPanel: NSPanel {
             presentSingle("Listening \(Self.formatElapsed(elapsed))", animating: true)
         case .transcribing(let elapsed):
             presentSingle("Transcribing \(Self.formatElapsed(elapsed))", animating: true)
+        case .modelLoading(let elapsed):
+            presentSingle("Loading model… \(Self.formatElapsed(elapsed))", animating: true)
         case .zhReady(let zh):
             // Bare ZH preview, no label prefix. In the translation flow
             // this stays visible for the entire LLM latency (waveform keeps

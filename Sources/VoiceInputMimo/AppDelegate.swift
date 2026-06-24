@@ -204,9 +204,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// silently NSLogs (sidecar/gateway may be down at launch — user gets the
     /// real error on first manual recording).
     private func warmUpASR() {
-        ASRClient.shared.smokeTranscribe { result in
+        ASRClient.shared.smokeTranscribe { [weak self] result in
             switch result {
             case .success(let r):
+                // Warmup ran a real (silence) inference → engine is hot. Stamp the
+                // freshness clock so prewarmIfStale() doesn't schedule a redundant
+                // smokeTranscribe on the next recording within the idle window.
+                self?.lastASRActivityAt = Date()
                 NSLog(
                     "[AppDelegate] ASR warmup done: elapsed=%dms wasCold=%@",
                     r.elapsedMs,
@@ -1335,24 +1339,37 @@ extension AppDelegate: JobRunner {
         // connect" / 502) is the single biggest failure class. Auto-(re)start it
         // here so the user no longer has to manually restart and re-record several
         // times. The spawn (≤30 s, typically ~3 s) is masked by the modelLoading
-        // overlay the phase timer already shows. The gateway (:4000) is not ours
-        // to start — if that is what's down, transcribeJob surfaces an actionable
-        // message rather than a raw URLError.
-        ensureSidecarReachable { [weak self] in
-            self?.transcribeJob(job, completion: completion)
+        // overlay the phase timer already shows.
+        ensureSidecarReachable { [weak self] result in
+            switch result {
+            case .success:
+                self?.transcribeJob(job, completion: completion)
+            case .failure(let startError):
+                // The sidecar couldn't be (re)started for a concrete reason — bad
+                // config (python/server.py missing), spawn failure, or health
+                // timeout. Surface THAT instead of letting transcribeJob fail with
+                // a generic gateway error that hides the real cause. Stop the phase
+                // timer first so handleJobFailure's .error overlay isn't stomped by
+                // the next modelLoading tick.
+                self?.stopPhaseTimer()
+                NSLog("[AppDelegate] ASR sidecar start failed (job=%@): %@",
+                      job.id.uuidString, startError.localizedDescription)
+                completion(.failure(JobPipelineError.sidecarStartFailed(startError.localizedDescription)))
+            }
         }
     }
 
-    /// Ensure the local ASR sidecar is running, then run `then`. Happy path
-    /// (already `.running`) calls straight through with no probe. Otherwise we
-    /// adopt-or-spawn via LocalASRServer and proceed regardless of the outcome —
-    /// transcribeJob maps any lingering connection failure to a friendly message.
-    private func ensureSidecarReachable(_ then: @escaping () -> Void) {
+    /// Ensure the local ASR sidecar is running, then report the outcome. Happy
+    /// path (already `.running`) reports success straight away with no probe.
+    /// Otherwise we adopt-or-spawn via LocalASRServer and propagate its result so
+    /// the caller can surface a concrete startup failure rather than a later
+    /// generic connection error.
+    private func ensureSidecarReachable(_ completion: @escaping (Result<Void, Error>) -> Void) {
         if case .running = LocalASRServer.shared.state {
-            then()
+            completion(.success(()))
             return
         }
-        LocalASRServer.shared.start { _ in then() }
+        LocalASRServer.shared.start(completion: completion)
     }
 
     private func transcribeJob(_ job: RecordingJob, completion: @escaping (Result<String, Error>) -> Void) {
@@ -1541,12 +1558,17 @@ private enum JobPipelineError: LocalizedError {
     /// Gateway up but the ASR sidecar isn't serving yet (502/503/504); the app
     /// has already tried to (re)start it, so a retry usually succeeds.
     case backendNotReady
+    /// The app tried to auto-(re)start the sidecar and that failed outright
+    /// (bad config / spawn / health timeout). Carries the concrete cause so the
+    /// user sees what to fix rather than a generic connection error.
+    case sidecarStartFailed(String)
 
     var userMessage: String {
         switch self {
         case .emptyTranscript: return "No speech detected"
         case .backendUnreachable: return "ASR 服務未啟動（gateway :4000 連不上），請先啟動 local-llm-backend"
         case .backendNotReady: return "ASR 引擎重啟中，請稍候再按一次"
+        case .sidecarStartFailed(let detail): return "ASR 引擎啟動失敗：\(detail)"
         }
     }
 

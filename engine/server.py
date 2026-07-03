@@ -20,6 +20,8 @@ Engine-only:
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import functools
 import json
 import logging
 import os
@@ -182,6 +184,18 @@ def _post_process(text: str, locale: str) -> str:
 
 tracker = MemoryTracker()
 
+
+def _collect_post_metrics() -> dict:
+    """Metal cache trim + memory snapshot — blocking, kept off the event loop.
+
+    trim_metal_cache touches Metal so it rides the dedicated inference thread;
+    snapshot has no thread affinity but rides along to keep post-response
+    housekeeping a single executor hop.
+    """
+    tracker.trim_metal_cache()
+    return tracker.snapshot()
+
+
 asr_idle_window = AdaptiveIdleWindow(
     ladder_seconds=IDLE_LADDER,
     hard_ceiling_seconds=IDLE_HARD_CEILING,
@@ -211,6 +225,15 @@ qwen_manager: Optional[RemoteQwenCacheManager] = (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     tracker.set_metal_cache_limit_mb(METAL_CACHE_LIMIT_MB)
+    # Dedicated single-thread executor for MLX inference. A private pool (not the
+    # shared default threadpool behind asyncio.to_thread) guarantees every
+    # transcription runs on the same OS thread — MLX + Metal have thread-affinity
+    # quirks — while the Lock serializes callers so only one inference is ever in
+    # flight. Both live off the event loop so /v1/health stays answerable mid-run.
+    app.state.infer_executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="mlx-infer"
+    )
+    app.state.infer_lock = asyncio.Lock()
     idle_task = asyncio.create_task(
         asr_model.idle_check_loop(check_interval=IDLE_CHECK_INTERVAL)
     )
@@ -239,6 +262,9 @@ async def lifespan(app: FastAPI):
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
+        # Drain any in-flight inference before evicting so the Metal trim in
+        # evict() never races the inference thread.
+        app.state.infer_executor.shutdown(wait=True)
         await asr_model.evict()
         log.info("engine stopped")
 
@@ -282,6 +308,7 @@ async def transcribe(
         or ""
     ).strip() or f"engine-{int(time.time()*1000)}"
     received_at = time.time()
+    loop = asyncio.get_running_loop()
     raw = await file.read()
     if len(raw) > MAX_AUDIO_BYTES:
         raise HTTPException(
@@ -323,10 +350,17 @@ async def transcribe(
             log.warning(f"[req={request_id}] Unknown language {lang!r} → auto")
             lang = "auto"
 
-        asr = await asr_model.get()
-        t0 = time.perf_counter()
-        raw_text = asr.transcribe(str(tmp_path), language=lang)
-        asr_elapsed = time.perf_counter() - t0
+        # Serialize inference (belt-and-suspenders alongside the single-worker
+        # executor) and run the blocking MLX call off the event loop so
+        # /v1/health stays responsive while a transcription is in flight.
+        async with request.app.state.infer_lock:
+            asr = await asr_model.get()
+            t0 = time.perf_counter()
+            raw_text = await loop.run_in_executor(
+                request.app.state.infer_executor,
+                functools.partial(asr.transcribe, str(tmp_path), language=lang),
+            )
+            asr_elapsed = time.perf_counter() - t0
 
         locale = output_locale or "zh-TW"
         if locale.lower() == "zh-tw":
@@ -392,8 +426,9 @@ async def transcribe(
         }
 
         async def _post_response_work():
-            tracker.trim_metal_cache()
-            snap = tracker.snapshot()
+            snap = await loop.run_in_executor(
+                request.app.state.infer_executor, _collect_post_metrics
+            )
             jsonl_payload["phys_mb"] = snap.get("phys_mb")
             jsonl_payload["rss_mb"] = snap.get("rss_mb")
             emit_request_jsonl(jsonl_payload)

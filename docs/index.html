@@ -66,10 +66,10 @@
           <a class="btn btn-ghost btn-lg" href="#loop">看它怎麼運作</a>
         </div>
         <ul class="hero-pills" aria-label="技術徽章">
-          <li>· macOS 14+ Apple Silicon</li>
-          <li>· 本機運算 不上雲</li>
-          <li>· 開源 MIT</li>
-          <li>· 原生 Markdown 友善</li>
+          <li>macOS 14+ Apple Silicon</li>
+          <li>本機運算 不上雲</li>
+          <li>開源 MIT</li>
+          <li>原生 Markdown 友善</li>
         </ul>
       </div>
       <div class="hero-stage" aria-hidden="true">
@@ -92,9 +92,11 @@
       <ol class="loop-list">
         <li class="loop-item">
           <article>
-            <div class="loop-num">No.01 · capture</div>
-            <h3><mark class="hl">按住 Fn</mark> 講話，放開就送出</h3>
-            <p class="loop-lead">不用按 toggle，不用喚醒詞。按住、講、放開，三步完成輸入。</p>
+            <div class="loop-copy">
+              <div class="loop-num">No.01 · capture</div>
+              <h3><mark class="hl">按住 Fn</mark> 講話，放開就送出</h3>
+              <p class="loop-lead">不用按 toggle，不用喚醒詞。按住、講、放開，三步完成輸入。</p>
+            </div>
             <div class="card-illus">
               <img src="./assets/img/illus-capture.svg" alt="" />
             </div>
@@ -103,12 +105,14 @@
 
         <li class="loop-item">
           <article>
-            <div class="loop-num">No.02 · transcribe</div>
-            <h3>MiMo ASR 把中英混講<mark class="hl">真的聽懂</mark></h3>
-            <p class="loop-lead">
-              用 Xiaomi 開源的 MiMo-V2.5-ASR（MLX INT4），中英 code-switching 是 native 能力，
-              不是「中文 ASR 強行接英文 token」。
-            </p>
+            <div class="loop-copy">
+              <div class="loop-num">No.02 · transcribe</div>
+              <h3>MiMo ASR 把中英混講<mark class="hl">真的聽懂</mark></h3>
+              <p class="loop-lead">
+                用 Xiaomi 開源的 MiMo-V2.5-ASR（MLX INT4），中英 code-switching 是 native 能力，
+                不是「中文 ASR 強行接英文 token」。
+              </p>
+            </div>
             <div class="phrase-grid">
               <div class="phrase">
                 <span class="phrase-label">你說</span>
@@ -128,11 +132,13 @@
 
         <li class="loop-item">
           <article>
-            <div class="loop-num">No.03 · refine</div>
-            <h3>同一段口述，<mark class="hl">4 種輸出</mark></h3>
-            <p class="loop-lead">
-              依當下需要切換：最快的純 ASR、清掉口語雜質的修正、給 Claude Code / Cursor 的英文翻譯、自動分流到模板的複合情境。
-            </p>
+            <div class="loop-copy">
+              <div class="loop-num">No.03 · refine</div>
+              <h3>同一段口述，<mark class="hl">4 種輸出</mark></h3>
+              <p class="loop-lead">
+                依當下需要切換：最快的純 ASR、清掉口語雜質的修正、給 Claude Code / Cursor 的英文翻譯、自動分流到模板的複合情境。
+              </p>
+            </div>
             <div class="card-illus">
               <img src="./assets/img/illus-refine.svg" alt="" />
             </div>
@@ -141,12 +147,14 @@
 
         <li class="loop-item">
           <article>
-            <div class="loop-num">No.04 · route</div>
-            <h3>關鍵字一出，<mark class="hl">模板自己接</mark></h3>
-            <p class="loop-lead">
-              選「複合情境」後，純 Swift router 看內容裡有沒有「會議結論 / TODO / 驗收條件 / 敬上」這類關鍵字，
-              自動切到對應的 5 種模板。不打 LLM 做 routing，省一次 call。
-            </p>
+            <div class="loop-copy">
+              <div class="loop-num">No.04 · route</div>
+              <h3>關鍵字一出，<mark class="hl">模板自己接</mark></h3>
+              <p class="loop-lead">
+                選「複合情境」後，純 Swift router 看內容裡有沒有「會議結論 / TODO / 驗收條件 / 敬上」這類關鍵字，
+                自動切到對應的 5 種模板。不打 LLM 做 routing，省一次 call。
+              </p>
+            </div>
             <div class="card-illus">
               <img src="./assets/img/illus-route.svg" alt="" />
             </div>
@@ -155,12 +163,14 @@
 
         <li class="loop-item">
           <article>
-            <div class="loop-num">No.05 · paste</div>
-            <h3>結果<mark class="hl">回到游標</mark>原本的位置</h3>
-            <p class="loop-lead">
-              貼上的時機點是你放開 Fn 的當下；不會跳出獨立視窗、不會打斷你正在打字的 app。
-              Overlay 顯示 Listening → Refining → Done 三態，狀態列也同步。
-            </p>
+            <div class="loop-copy">
+              <div class="loop-num">No.05 · paste</div>
+              <h3>結果<mark class="hl">回到游標</mark>原本的位置</h3>
+              <p class="loop-lead">
+                貼上的時機點是你放開 Fn 的當下；不會跳出獨立視窗、不會打斷你正在打字的 app。
+                Overlay 顯示 Listening → Refining → Done 三態，狀態列也同步。
+              </p>
+            </div>
             <div class="card-illus">
               <img src="./assets/img/illus-paste.svg" alt="" />
             </div>

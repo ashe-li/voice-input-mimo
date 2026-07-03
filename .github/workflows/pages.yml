@@ -13,9 +13,13 @@ permissions:
   pages: write
   id-token: write
 
+# 只允許單一並行部署；佇列中僅保留最新一筆。
+# 但「不」取消進行中的部署 —— 取消一個 in-flight run 會留下半成品 deployment，
+# 與後續 run 的 deployment 在 Pages 後端相撞（"Deployment failed, try again later"）。
+# 對照 GitHub 官方 Pages starter workflow。
 concurrency:
   group: pages
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 jobs:
   deploy:

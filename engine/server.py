@@ -61,6 +61,11 @@ ZHTW_RULESET_PATH = Path(os.environ.get(
 
 METAL_CACHE_LIMIT_MB = int(os.environ.get("ENGINE_METAL_CACHE_LIMIT_MB", "1024"))
 
+# Max seconds to wait for in-flight post-response audit tasks to finish on
+# shutdown before giving up, so a normal shutdown flushes their JSONL records
+# instead of dropping them (a stuck task still can't hang teardown forever).
+POST_WORK_DRAIN_TIMEOUT_S = float(os.environ.get("ENGINE_POST_WORK_DRAIN_TIMEOUT_S", "10"))
+
 # Reject audio uploads larger than this. Localhost-bound but defense-in-depth.
 MAX_AUDIO_BYTES = int(os.environ.get("ENGINE_MAX_AUDIO_BYTES", str(50 * 1024 * 1024)))
 
@@ -253,6 +258,9 @@ async def lifespan(app: FastAPI):
         max_workers=1, thread_name_prefix="mlx-infer"
     )
     app.state.infer_lock = asyncio.Lock()
+    # Live post-response audit tasks, drained on shutdown so no JSONL record is
+    # lost. Tasks add/remove themselves via a done-callback.
+    app.state.post_work_tasks = set()
     idle_task = asyncio.create_task(
         asr_model.idle_check_loop(
             check_interval=IDLE_CHECK_INTERVAL,
@@ -284,6 +292,17 @@ async def lifespan(app: FastAPI):
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
+        # Flush in-flight post-response audit tasks before tearing down the pool
+        # so their emit_request_jsonl runs — otherwise a task still awaiting its
+        # executor future when the loop stops loses that record silently.
+        pending = list(app.state.post_work_tasks)
+        if pending:
+            _, unfinished = await asyncio.wait(pending, timeout=POST_WORK_DRAIN_TIMEOUT_S)
+            if unfinished:
+                log.warning(
+                    f"{len(unfinished)} post-response audit task(s) unfinished at "
+                    "shutdown — records may be missing"
+                )
         # Evict under the inference lock (same one transcribe/idle use), then
         # drain and close the pool. Order matters: evict()'s Metal trim hops onto
         # infer_executor, so the pool must still be alive here — shut it down only
@@ -468,7 +487,11 @@ async def transcribe(
                 log.exception(f"[req={request_id}] post-response metrics failed")
             emit_request_jsonl(jsonl_payload)
 
-        asyncio.create_task(_finish_post_response_work())
+        post_task = asyncio.create_task(_finish_post_response_work())
+        # Register so a normal shutdown can wait for the audit write to finish.
+        post_tasks = request.app.state.post_work_tasks
+        post_tasks.add(post_task)
+        post_task.add_done_callback(post_tasks.discard)
 
 
 @app.get("/admin/memory")

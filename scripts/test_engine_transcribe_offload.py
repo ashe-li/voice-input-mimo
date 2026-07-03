@@ -18,6 +18,7 @@ Run from repo root:
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 import io
 import os
@@ -251,8 +252,68 @@ def test_post_work_runs_on_dedicated_thread(base: str) -> None:
         srv._collect_post_metrics = orig
 
 
+def test_shutdown_drains_pending_audit() -> None:
+    """HIGH regression: a normal lifespan shutdown must flush the audit record of
+    an in-flight post-response task. Runs on its own event loop (own lifespan)."""
+
+    async def _run() -> None:
+        # Fresh lock bound to this loop (the module singleton's lock was bound to
+        # the now-closed uvicorn test loop).
+        srv.asr_model._lock = asyncio.Lock()
+        srv.asr_model._model = FakeASR(delay=0.05)
+        emit_calls: list = []
+        orig_emit = srv.emit_request_jsonl
+        orig_collect = srv._collect_post_metrics
+
+        def slow_collect() -> dict:
+            time.sleep(0.4)  # keep post-work in flight when shutdown begins
+            return orig_collect()
+
+        srv.emit_request_jsonl = lambda payload: emit_calls.append(payload)
+        srv._collect_post_metrics = slow_collect
+        try:
+            async with srv.lifespan(srv.app):
+                transport = httpx.ASGITransport(app=srv.app)
+                async with httpx.AsyncClient(
+                    transport=transport, base_url="http://engine.test"
+                ) as client:
+                    r = await client.post("/v1/audio/transcriptions", files=FILES)
+                    assert r.status_code == 200, f"transcribe status {r.status_code}"
+                # Simulate the model already evicted (e.g. by idle eviction) so the
+                # shutdown's own evict is a no-op and does not incidentally give the
+                # loop a scheduling window — isolating the drain as the sole thing
+                # that flushes the audit record.
+                srv.asr_model._model = None
+            # lifespan has exited (shutdown complete): the drain must have run the
+            # post-work task's emit_request_jsonl before teardown finished.
+            assert emit_calls, (
+                "audit record lost: emit_request_jsonl did not run before shutdown "
+                "completed"
+            )
+        finally:
+            srv.emit_request_jsonl = orig_emit
+            srv._collect_post_metrics = orig_collect
+            srv.asr_model._model = None
+
+    asyncio.run(_run())
+
+
+def _record(name: str, fn, failed: list) -> None:
+    try:
+        fn()
+        print(f"[PASS] {name}")
+    except AssertionError as e:
+        failed.append((name, str(e) or "AssertionError"))
+        print(f"[FAIL] {name}: {e}")
+    except Exception as e:  # noqa: BLE001
+        failed.append((name, f"{type(e).__name__}: {e}"))
+        print(f"[ERROR] {name}: {type(e).__name__}: {e}")
+    finally:
+        srv.asr_model._model = None
+
+
 def main() -> int:
-    tests = [
+    server_tests = [
         test_health_stays_responsive_during_inference,
         test_concurrent_transcribes_are_serialized,
         test_inference_runs_on_dedicated_single_thread,
@@ -260,21 +321,17 @@ def main() -> int:
         test_evict_serialized_with_inference,
         test_post_work_runs_on_dedicated_thread,
     ]
+    # Uses its own event loop + lifespan, so it must run after the shared uvicorn
+    # server has stopped.
+    standalone_tests = [test_shutdown_drains_pending_audit]
     failed: list[tuple] = []
     with running_server(_free_port()) as base:
-        for t in tests:
-            try:
-                t(base)
-                print(f"[PASS] {t.__name__}")
-            except AssertionError as e:
-                failed.append((t.__name__, str(e) or "AssertionError"))
-                print(f"[FAIL] {t.__name__}: {e}")
-            except Exception as e:  # noqa: BLE001
-                failed.append((t.__name__, f"{type(e).__name__}: {e}"))
-                print(f"[ERROR] {t.__name__}: {type(e).__name__}: {e}")
-            finally:
-                srv.asr_model._model = None
-    print(f"\n{len(tests) - len(failed)}/{len(tests)} passed")
+        for t in server_tests:
+            _record(t.__name__, lambda t=t: t(base), failed)
+    for t in standalone_tests:
+        _record(t.__name__, t, failed)
+    total = len(server_tests) + len(standalone_tests)
+    print(f"\n{total - len(failed)}/{total} passed")
     return 0 if not failed else 1
 
 

@@ -437,6 +437,84 @@ final class LLMRefiner {
         }
     }
 
+    // MARK: - Cold-load warmup
+
+    /// Gateway queue for the warmup probe. Deliberately NOT `quick`: quick's 5s
+    /// gateway timeout aborts a Rapid-MLX cold load (heavy cold ≥14–25s) — the
+    /// exact case warmup exists to hide. `default` (30s gateway queue) covers the
+    /// observed cold-load range; the residual >30s tail is handled downstream by
+    /// the gateway-503 + single-retry path, not here.
+    static let warmUpGatewayMode = "default"
+
+    /// Client-side timeout for the warmup request. Longer than `default`'s 30s
+    /// gateway timeout so the client never gives up before the gateway returns
+    /// (success or a 503 the caller can act on), while still bounding a hung probe.
+    static let warmUpTimeoutSeconds: TimeInterval = 60
+
+    /// Minimal user content for the warmup probe. One token in / `max_tokens: 1`
+    /// out is enough to force the backend to load the model without paying for
+    /// real generation.
+    private static let warmUpProbeContent = "hi"
+
+    /// Build the warmup request: a minimal `max_tokens: 1` chat completion routed
+    /// through the non-quick gateway queue. Pure/synchronous so the request shape
+    /// (mode, timeout, max_tokens) is unit-testable without the network. Returns
+    /// nil only when the configured base URL is malformed.
+    func makeWarmUpRequest() -> URLRequest? {
+        guard let url = URL(string: "\(normalizedBaseURL())/chat/completions") else {
+            return nil
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = Self.warmUpTimeoutSeconds
+        let body: [String: Any] = [
+            "model": model,
+            "messages": [["role": "user", "content": Self.warmUpProbeContent]],
+            "max_tokens": 1,
+            "mode": Self.warmUpGatewayMode,
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        return request
+    }
+
+    /// Whether a warmup response confirms the backend is now hot. Only a 2xx
+    /// counts: a gateway 503 (still cold / not ready) or any transport error must
+    /// NOT stamp the freshness clock, so the next record-start retries. Pure —
+    /// unit-tested in place of the fire-and-forget network wiring.
+    static func warmUpSucceeded(statusCode: Int?, error: Error?) -> Bool {
+        if error != nil { return false }
+        guard let statusCode else { return false }
+        return (200..<300).contains(statusCode)
+    }
+
+    /// Fire a fire-and-forget warmup probe to pull the LLM backend hot during the
+    /// recording+ASR window, so the first refine after a Rapid-MLX process restart
+    /// isn't aborted mid-cold-load. Uses its own URLSession task (NOT `currentTask`)
+    /// so it can never be cancelled by — or cancel — an in-flight refine; the two
+    /// are independent requests the gateway queues on its own side. `onSuccess`
+    /// runs on the main queue after a confirmed-hot (2xx) response; failures are
+    /// logged and swallowed so they never surface to the user or block recording.
+    func warmUp(onSuccess: (() -> Void)? = nil) {
+        guard isEnabled, isConfigured else { return }
+        guard let request = makeWarmUpRequest() else {
+            logger.error("warmUp skipped: invalid base URL")
+            return
+        }
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            let status = (response as? HTTPURLResponse)?.statusCode
+            if Self.warmUpSucceeded(statusCode: status, error: error) {
+                logger.debug("warmUp ok (backend hot)")
+                DispatchQueue.main.async { onSuccess?() }
+            } else if let error {
+                logger.debug("warmUp failed (benign): \(error.localizedDescription)")
+            } else {
+                logger.debug("warmUp non-2xx (benign): status=\(status ?? -1)")
+            }
+        }.resume()
+    }
+
     // MARK: - System prompt resolution
 
     /// Resolve the system prompt with three-tier fallback:

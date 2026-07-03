@@ -242,6 +242,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         warmUpASR()
     }
 
+    /// Freshness clock for the LLM refine backend, mirroring `lastASRActivityAt`
+    /// for ASR. Stamped on a successful warmup probe or a successful real refine;
+    /// read at record-start to skip redundant warmups. Value type, touched only
+    /// on the main thread (see `LLMWarmState`).
+    private var llmWarmState = LLMWarmState(idleThreshold: AppDelegate.prewarmIfIdleSeconds)
+
+    /// Cold-load mitigation for LLM refine, mirroring `prewarmIfStale()` for ASR.
+    /// Fires a fire-and-forget warmup in parallel with recording so the LLM
+    /// finishes any Rapid-MLX cold-load inside the record+ASR window — masking it
+    /// instead of paying it as a refine that a 5s gateway abort degrades to raw
+    /// ASR. No-op when a hot LLM was confirmed within the idle window; the first
+    /// recording after launch (never-confirmed) always warms.
+    private func prewarmLLMIfStale() {
+        guard llmWarmState.needsWarmUp(now: Date()) else { return }
+        LLMRefiner.shared.warmUp { [weak self] in
+            // Delivered on the main queue by warmUp() — safe to mutate the clock.
+            self?.llmWarmState.recordActivity(at: Date())
+        }
+    }
+
     /// Idempotent: once `prompts/active.json` exists `bootstrapIfNeeded`
     /// short-circuits, so this is safe to call on every launch.
     private func bootstrapPromptStore() {
@@ -364,6 +384,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // with this recording so a long-idle first recording is already warm by
         // fnUp, masking the ~2.3s cold-load behind the recording window.
         prewarmIfStale()
+        // Same masking trick for the LLM refine backend (S2.1): warm it in
+        // parallel so a cold Rapid-MLX process doesn't force the first refine to
+        // abort mid-cold-load and fall back to raw ASR. Independent of the ASR
+        // warmup — separate backend, separate request.
+        prewarmLLMIfStale()
     }
 
     private func fnUp() {
@@ -1476,6 +1501,11 @@ extension AppDelegate: JobRunner {
             self?.stopPhaseTimer()
             switch result {
             case .success(let refined):
+                // Real refine succeeded → LLM backend is hot. Stamp so the next
+                // record-start prewarm is skipped within the idle window (mirror
+                // of the ASR stamp in transcribeJob). refine() delivers this on
+                // the main queue, so the clock mutation stays main-thread.
+                self?.llmWarmState.recordActivity(at: Date())
                 let final = refined.isEmpty ? asr : refined
                 job.tracer.recordLLM(final, mode: activeMode.rawValue)
                 completion(.success(final))

@@ -33,10 +33,9 @@ struct LLMWarmState: Equatable {
         return now.timeIntervalSince(last) > idleThreshold
     }
 
-    /// Stamp a confirmed-hot moment. Called after a successful warmup probe or a
-    /// successful real refine so the next record-start doesn't re-warm within
-    /// the idle window (PR #21 lesson: warmup must update the freshness clock,
-    /// or the next recording schedules a redundant probe).
+    /// Stamp a confirmed-hot moment. Must be called after a successful warmup
+    /// probe (not only a real refine), or the next record-start within the idle
+    /// window schedules a redundant warmup.
     mutating func recordActivity(at date: Date) {
         lastActivityAt = date
     }

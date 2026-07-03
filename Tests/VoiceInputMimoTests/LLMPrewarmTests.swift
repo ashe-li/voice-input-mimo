@@ -114,12 +114,15 @@ final class LLMPrewarmTests: XCTestCase {
         let mode = json["mode"] as? String
         XCTAssertNotEqual(mode, "quick", "warmup must not use the quick queue")
         XCTAssertEqual(mode, LLMRefiner.warmUpGatewayMode)
-        XCTAssertEqual(json["max_tokens"] as? Int, 1)
+        XCTAssertEqual(json["max_tokens"] as? Int, LLMRefiner.warmUpMaxTokens)
     }
 
-    /// The gateway-mode constant maps to one of the gateway's known non-quick
-    /// queues, guarding against a typo that the gateway would silently reject.
-    func testWarmUpGatewayMode_IsAKnownNonQuickQueue() {
-        XCTAssertTrue(["default", "batch"].contains(LLMRefiner.warmUpGatewayMode))
+    /// Direct equality (not `contains`) so a typo in the constant is caught: the
+    /// warmup queue must be the non-quick `default`, and the probe caps output at
+    /// a single token.
+    func testWarmUpConstants() {
+        XCTAssertEqual(LLMRefiner.warmUpGatewayMode, "default")
+        XCTAssertNotEqual(LLMRefiner.warmUpGatewayMode, "quick")
+        XCTAssertEqual(LLMRefiner.warmUpMaxTokens, 1)
     }
 }

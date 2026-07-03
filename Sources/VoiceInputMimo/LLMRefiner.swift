@@ -117,6 +117,24 @@ final class LLMRefiner {
     /// Only touched on the main queue (see `scheduleRetry`).
     private var pendingRetryWork: DispatchWorkItem?
 
+    /// Monotonic token bumped by `cancel()`. A 503 retry captures the value at
+    /// send time and only fires while it still matches — so an interrupt that
+    /// preempts the job drops the retry regardless of how it races the (background)
+    /// URLSession completion that decided to retry. Closes the scheduleRetry ×
+    /// cancel window where a stale retry could otherwise overwrite `currentTask`.
+    /// Main-queue only.
+    private var generation = 0
+
+    /// Test seam: send-time generation snapshot (use a fresh instance per test).
+    var currentGeneration: Int { generation }
+
+    /// Test seam for the retry timer — production defers on the main queue; tests
+    /// inject a synchronous / capturing variant so retry gating is verified
+    /// without a real `Retry-After` sleep. Only invoked on the main queue.
+    var scheduleRetryAfter: (TimeInterval, DispatchWorkItem) -> Void = { delay, work in
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
     // Hardcoded defaults are composed from `BuiltinPromptCatalog` so the legacy
     // fallback (used only when `PromptStore` has no active profile) stays in
     // sync with the catalog version. Single source of truth — `/no_think`
@@ -270,7 +288,7 @@ final class LLMRefiner {
             suffixToAppend = ""
         }
 
-        performRefineRequest(
+        let attempt = RefineAttempt(
             systemPrompt: systemPrompt,
             text: text,
             requestId: requestId,
@@ -282,31 +300,51 @@ final class LLMRefiner {
             profileLabel: activeProfile?.id ?? "<none>",
             suffixToAppend: suffixToAppend,
             isRetry: false,
-            completion: completion
+            generation: generation
         )
+        performRefineRequest(attempt, completion: completion)
     }
 
-    /// Build and send one refine request, handling the 503-triggered single
-    /// retry (S2.2). On a gateway 503 (first attempt) it waits the `Retry-After`
-    /// delay then re-sends exactly once via the `default` queue (`retryGatewayMode`)
-    /// so the retry rides the residual cold load; any other outcome flows to the
-    /// existing success/failure handling → raw-ASR fallback in AppDelegate.
+    /// Immutable per-attempt parameters for one refine HTTP send. Bundled so the
+    /// send path and its one-shot retry share a single value rather than an
+    /// 11-argument call, and so `performRefineRequest` stays small.
+    struct RefineAttempt {
+        let systemPrompt: String
+        let text: String
+        let requestId: String
+        let model: String
+        let temperature: Double
+        let maxTokens: Int
+        let gatewayMode: String
+        let modeLabel: String
+        let profileLabel: String
+        let suffixToAppend: String
+        let isRetry: Bool
+        /// Send-time generation; preserved across the retry so a superseded job's
+        /// retry is still dropped by the generation guard.
+        let generation: Int
+
+        /// The one-shot retry: same request re-sent via the default (non-quick)
+        /// queue with `isRetry` set.
+        func retryAttempt() -> RefineAttempt {
+            RefineAttempt(
+                systemPrompt: systemPrompt, text: text, requestId: requestId,
+                model: model, temperature: temperature, maxTokens: maxTokens,
+                gatewayMode: LLMRefiner.retryGatewayMode, modeLabel: modeLabel,
+                profileLabel: profileLabel, suffixToAppend: suffixToAppend,
+                isRetry: true, generation: generation
+            )
+        }
+    }
+
+    /// Build and send one refine attempt. The 503-triggered retry / response
+    /// handling lives in `handleCompletion` so this stays focused on send.
     ///
-    /// Retry state (`currentTask`, `pendingRetryWork`) is mutated only on the
-    /// main queue — the job queue drives refine on main and `cancel()` runs on
-    /// main, so there is no cross-thread race with an interrupting segment.
+    /// Retry state (`currentTask`, `pendingRetryWork`, `generation`) is mutated
+    /// only on the main queue — the job queue drives refine on main and `cancel()`
+    /// runs on main, so there is no cross-thread race with an interrupting segment.
     private func performRefineRequest(
-        systemPrompt: String,
-        text: String,
-        requestId: String,
-        model: String,
-        temperature: Double,
-        maxTokens: Int,
-        gatewayMode: String,
-        modeLabel: String,
-        profileLabel: String,
-        suffixToAppend: String,
-        isRetry: Bool,
+        _ attempt: RefineAttempt,
         completion: @escaping (Result<String, Error>) -> Void
     ) {
         guard let url = URL(string: "\(normalizedBaseURL())/chat/completions") else {
@@ -318,64 +356,76 @@ final class LLMRefiner {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        if !requestId.isEmpty {
-            request.setValue(requestId, forHTTPHeaderField: "X-Request-Id")
+        if !attempt.requestId.isEmpty {
+            request.setValue(attempt.requestId, forHTTPHeaderField: "X-Request-Id")
         }
         request.timeoutInterval = 90  // Qwen3 reasoning models can take 30s+ per inference
+        request.httpBody = try? JSONSerialization.data(withJSONObject: Self.requestBody(for: attempt))
 
-        let body: [String: Any] = [
-            "model": model,
-            "messages": [
-                ["role": "system", "content": systemPrompt],
-                ["role": "user", "content": text],
-            ],
-            "temperature": temperature,
-            "max_tokens": maxTokens,
-            "mode": gatewayMode,
-        ]
-
-        let logTag = requestId.isEmpty ? "" : "[req=\(requestId)] "
-        logger.debug("\(logTag)Request: \(url.absoluteString) model=\(model) mode=\(gatewayMode) profile=\(profileLabel) retry=\(isRetry)")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        let logTag = attempt.requestId.isEmpty ? "" : "[req=\(attempt.requestId)] "
+        logger.debug("\(logTag)Request: \(url.absoluteString) model=\(attempt.model) mode=\(attempt.gatewayMode) profile=\(attempt.profileLabel) retry=\(attempt.isRetry)")
 
         currentTask = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
-            // Cancelled mid-flight: caller (RecordingJobQueue) will resume
-            // this job later. Don't fire completion — the JobRunner callback
-            // would stopPhaseTimer / mutate overlay state belonging to the
-            // new in-flight segment.
-            let nsErr = error as NSError?
-            if nsErr?.code == NSURLErrorCancelled {
-                return
-            }
-            // 503-triggered single retry: a gateway 503 on the first attempt is
-            // the cold fast-fail. Wait the Retry-After delay then re-send once
-            // via the default queue. Non-503 / already-retried give up and fall
-            // through to the raw-ASR fallback in handleRefineResponse.
-            let http = response as? HTTPURLResponse
-            let decision = Self.decideRetry(
-                statusCode: http?.statusCode,
-                retryAfterHeader: http?.value(forHTTPHeaderField: "Retry-After"),
-                isRetry: isRetry
-            )
-            if case .retry(let afterSeconds) = decision {
-                logger.debug("\(logTag)gateway 503 — retrying once via \(Self.retryGatewayMode) after \(afterSeconds)s")
-                self?.scheduleRetry(afterSeconds: afterSeconds) { [weak self] in
-                    self?.performRefineRequest(
-                        systemPrompt: systemPrompt, text: text, requestId: requestId,
-                        model: model, temperature: temperature, maxTokens: maxTokens,
-                        gatewayMode: Self.retryGatewayMode, modeLabel: modeLabel,
-                        profileLabel: profileLabel, suffixToAppend: suffixToAppend,
-                        isRetry: true, completion: completion
-                    )
-                }
-                return
-            }
-            Self.handleRefineResponse(
-                data: data, error: error, suffixToAppend: suffixToAppend,
-                modeLabel: modeLabel, text: text, logTag: logTag, completion: completion
+            self?.handleCompletion(
+                attempt: attempt, data: data, response: response, error: error,
+                logTag: logTag, completion: completion
             )
         }
         currentTask?.resume()
+    }
+
+    private static func requestBody(for attempt: RefineAttempt) -> [String: Any] {
+        [
+            "model": attempt.model,
+            "messages": [
+                ["role": "system", "content": attempt.systemPrompt],
+                ["role": "user", "content": attempt.text],
+            ],
+            "temperature": attempt.temperature,
+            "max_tokens": attempt.maxTokens,
+            "mode": attempt.gatewayMode,
+        ]
+    }
+
+    /// URLSession completion (background queue): decide 503 retry vs terminal
+    /// response. A gateway 503 on a first quick attempt schedules the one-shot
+    /// retry; everything else falls through to `handleRefineResponse` → raw-ASR
+    /// fallback in AppDelegate.
+    private func handleCompletion(
+        attempt: RefineAttempt,
+        data: Data?,
+        response: URLResponse?,
+        error: Error?,
+        logTag: String,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        // Cancelled mid-flight: caller (RecordingJobQueue) will resume this job
+        // later. Don't fire completion — the JobRunner callback would mutate
+        // overlay state belonging to the new in-flight segment.
+        let nsErr = error as NSError?
+        if nsErr?.code == NSURLErrorCancelled { return }
+
+        let http = response as? HTTPURLResponse
+        let decision = Self.decideRetry(
+            statusCode: http?.statusCode,
+            retryAfterHeader: http?.value(forHTTPHeaderField: "Retry-After"),
+            isRetry: attempt.isRetry,
+            gatewayMode: attempt.gatewayMode
+        )
+        if case .retry(let afterSeconds) = decision {
+            // .notice (not .debug): os.Logger drops debug by default, and this is
+            // the only signal that the S2.2 cold-load retry actually engaged.
+            logger.notice("\(logTag)gateway 503 — retrying once via \(Self.retryGatewayMode) after \(afterSeconds)s")
+            let retry = attempt.retryAttempt()
+            scheduleRetry(generation: attempt.generation, afterSeconds: afterSeconds) { [weak self] in
+                self?.performRefineRequest(retry, completion: completion)
+            }
+            return
+        }
+        Self.handleRefineResponse(
+            data: data, error: error, suffixToAppend: attempt.suffixToAppend,
+            modeLabel: attempt.modeLabel, text: attempt.text, logTag: logTag, completion: completion
+        )
     }
 
     /// Parse a chat-completions response and fire `completion` on the main queue.
@@ -427,21 +477,41 @@ final class LLMRefiner {
         DispatchQueue.main.async { completion(.success(finalText)) }
     }
 
-    /// Schedule the single 503 retry on the main queue so `pendingRetryWork` and
-    /// `currentTask` are only ever touched there (`cancel()` also runs on main),
-    /// avoiding a race with an interrupting segment. `asyncAfter` defers the work
-    /// without blocking the queue; `cancel()` drops the pending item so an
-    /// interrupted job never fires a stale retry.
-    private func scheduleRetry(afterSeconds: TimeInterval, _ body: @escaping () -> Void) {
+    /// Hop the 503 retry onto the main queue, then arm it. The whole
+    /// "check generation + set pendingRetryWork + schedule" runs in one main-queue
+    /// turn, so a `cancel()` that raced the (background) completion is seen either
+    /// before arming (generation guard drops it) or after (it cancelled the work /
+    /// bumped the generation). Either ordering is caught.
+    private func scheduleRetry(generation: Int, afterSeconds: TimeInterval, _ body: @escaping () -> Void) {
         DispatchQueue.main.async { [weak self] in
-            guard let self else { return }
-            let work = DispatchWorkItem(block: body)
-            self.pendingRetryWork = work
-            DispatchQueue.main.asyncAfter(deadline: .now() + afterSeconds, execute: work)
+            self?.armRetry(generation: generation, afterSeconds: afterSeconds, body)
         }
     }
 
+    /// Arm the single retry on the main queue. If `cancel()` already bumped the
+    /// generation, the retry is dropped here; otherwise the deferred work re-checks
+    /// the generation before running `body`, so an interrupt during the wait also
+    /// drops it. Internal for tests (see `scheduleRetryAfter`).
+    func armRetry(generation: Int, afterSeconds: TimeInterval, _ body: @escaping () -> Void) {
+        guard generation == self.generation else { return }  // superseded before arming
+        let work = DispatchWorkItem { [weak self] in
+            self?.executeRetryIfCurrent(generation: generation, body)
+        }
+        pendingRetryWork = work
+        scheduleRetryAfter(afterSeconds, work)
+    }
+
+    /// Run `body` only if the send-time `generation` is still current — i.e. no
+    /// `cancel()` / interrupt happened since. Internal for tests.
+    func executeRetryIfCurrent(generation: Int, _ body: () -> Void) {
+        guard generation == self.generation else { return }  // superseded during wait
+        body()
+    }
+
     func cancel() {
+        // Bump first: invalidates any in-flight retry (armed or mid-schedule) even
+        // if it races this call on the main queue.
+        generation &+= 1
         currentTask?.cancel()
         currentTask = nil
         pendingRetryWork?.cancel()
@@ -554,10 +624,14 @@ final class LLMRefiner {
     /// (success or a 503 the caller can act on), while still bounding a hung probe.
     static let warmUpTimeoutSeconds: TimeInterval = 60
 
-    /// Minimal user content for the warmup probe. One token in / `max_tokens: 1`
-    /// out is enough to force the backend to load the model without paying for
-    /// real generation.
+    /// Minimal user content for the warmup probe. One token in / one token out is
+    /// enough to force the backend to load the model without paying for real
+    /// generation.
     private static let warmUpProbeContent = "hi"
+
+    /// Output cap for the warmup probe — a single token forces a model load with
+    /// no real generation.
+    static let warmUpMaxTokens = 1
 
     /// Build the warmup request: a minimal `max_tokens: 1` chat completion routed
     /// through the non-quick gateway queue. Pure/synchronous so the request shape
@@ -575,7 +649,7 @@ final class LLMRefiner {
         let body: [String: Any] = [
             "model": model,
             "messages": [["role": "user", "content": Self.warmUpProbeContent]],
-            "max_tokens": 1,
+            "max_tokens": Self.warmUpMaxTokens,
             "mode": Self.warmUpGatewayMode,
         ]
         request.httpBody = try? JSONSerialization.data(withJSONObject: body)
@@ -625,6 +699,10 @@ final class LLMRefiner {
     /// so the retry gets the 30s budget to ride the residual cold load.
     static let retryGatewayMode = "default"
 
+    /// Gateway queue whose 5s budget the cold-load retry exists to protect. Only
+    /// a 503 on this queue triggers a retry (see `decideRetry`).
+    static let quickGatewayMode = "quick"
+
     /// Wait applied when the gateway 503s without a usable `Retry-After`. Sized
     /// to the light-cold reload; the retry itself then has the 30s default-queue
     /// budget on top.
@@ -642,17 +720,23 @@ final class LLMRefiner {
         case giveUp
     }
 
-    /// Decide whether a refine response should trigger the one-shot retry. Only a
-    /// gateway 503 on the first attempt retries; everything else (non-503, a
-    /// transport error with no status, or an already-retried request) gives up so
-    /// the caller falls through to the raw-ASR fallback. This is what bounds the
-    /// retry to exactly one and prevents a retry storm.
+    /// Decide whether a refine response should trigger the one-shot retry. Retries
+    /// only a gateway 503 on the FIRST attempt of a QUICK-queue request; everything
+    /// else gives up so the caller falls through to the raw-ASR fallback:
+    ///   - already retried → bounds the retry to exactly one (no storm)
+    ///   - non-503 / no HTTP status → not the cold fast-fail (5s-abort timeout
+    ///     surfaces as a URLError with no 503 and must not retry)
+    ///   - non-quick queue → the mechanism is for quick's 5s budget; default(30s)
+    ///     gains nothing by retrying as default, and structure(batch/60s) would be
+    ///     downgraded to the 30s default queue. Their 503s take the failure path.
     static func decideRetry(
         statusCode: Int?,
         retryAfterHeader: String?,
-        isRetry: Bool
+        isRetry: Bool,
+        gatewayMode: String
     ) -> RefineRetryDecision {
         guard !isRetry else { return .giveUp }
+        guard gatewayMode == quickGatewayMode else { return .giveUp }
         guard statusCode == 503 else { return .giveUp }
         return .retry(afterSeconds: parseRetryAfter(retryAfterHeader))
     }

@@ -2,9 +2,11 @@ import XCTest
 @testable import VoiceInputMimo
 
 /// Unit tests for the 503-triggered single retry (S2.2, VIM side). Exercises the
-/// pure decision + Retry-After parsing extracted from `LLMRefiner`'s refine path:
-///   - `decideRetry(statusCode:retryAfterHeader:isRetry:)` — retry gating
-///   - `parseRetryAfter(_:)`                               — delay parse + clamp
+/// pure decision + Retry-After parsing plus the generation-guarded scheduling
+/// extracted from `LLMRefiner`'s refine path:
+///   - `decideRetry(statusCode:retryAfterHeader:isRetry:gatewayMode:)` — retry gating
+///   - `parseRetryAfter(_:)`                                            — delay parse + clamp
+///   - `armRetry` / `executeRetryIfCurrent` / `cancel`                 — cancel-safe scheduling
 ///
 /// The network wiring (`performRefineRequest` send → wait → default-mode retry →
 /// success/fallback) is not unit-tested here; it composes these pure pieces over
@@ -13,27 +15,43 @@ import XCTest
 /// rather than the live HTTP call.
 final class LLMRefineRetryTests: XCTestCase {
 
-    // MARK: - decideRetry: only a gateway 503 (first attempt) retries
+    private let quick = LLMRefiner.quickGatewayMode
+
+    // MARK: - decideRetry: only a quick-queue gateway 503 (first attempt) retries
 
     /// Req: 503 + Retry-After on the first attempt → retry once, waiting the
     /// parsed delay (the send-then-default-retry outcome is integration-level).
     func testFirst503WithRetryAfter_RetriesWithParsedDelay() {
-        let d = LLMRefiner.decideRetry(statusCode: 503, retryAfterHeader: "15", isRetry: false)
+        let d = LLMRefiner.decideRetry(
+            statusCode: 503, retryAfterHeader: "15", isRetry: false, gatewayMode: quick)
         XCTAssertEqual(d, .retry(afterSeconds: 15))
     }
 
     /// Req 4: 503 without a usable Retry-After still retries, using the default
     /// wait — a missing header must not suppress the retry.
     func testFirst503WithoutRetryAfter_RetriesWithDefaultDelay() {
-        let d = LLMRefiner.decideRetry(statusCode: 503, retryAfterHeader: nil, isRetry: false)
+        let d = LLMRefiner.decideRetry(
+            statusCode: 503, retryAfterHeader: nil, isRetry: false, gatewayMode: quick)
         XCTAssertEqual(d, .retry(afterSeconds: LLMRefiner.defaultRetryAfterSeconds))
     }
 
     /// Req 5: retry exactly once — a second 503 (already retried) gives up, even
     /// with a valid Retry-After. This is what bounds the retry to a single shot.
     func testSecond503_GivesUp() {
-        let d = LLMRefiner.decideRetry(statusCode: 503, retryAfterHeader: "5", isRetry: true)
+        let d = LLMRefiner.decideRetry(
+            statusCode: 503, retryAfterHeader: "5", isRetry: true, gatewayMode: quick)
         XCTAssertEqual(d, .giveUp)
+    }
+
+    /// Non-quick queues (default 30s / batch 60s) do NOT retry on 503 — the
+    /// mechanism is only for the quick 5s budget; retrying would either be a no-op
+    /// (default) or downgrade structure(batch) to the 30s default queue.
+    func testNonQuickModes_NeverRetryOn503() {
+        for mode in ["default", "batch"] {
+            let d = LLMRefiner.decideRetry(
+                statusCode: 503, retryAfterHeader: "5", isRetry: false, gatewayMode: mode)
+            XCTAssertEqual(d, .giveUp, "mode \(mode) must not retry on 503")
+        }
     }
 
     /// Req 3: non-503 statuses never retry (prevents a retry storm; the 5s-abort
@@ -41,14 +59,16 @@ final class LLMRefineRetryTests: XCTestCase {
     /// to the raw-ASR fallback).
     func testNon503Statuses_NeverRetry() {
         for code in [200, 429, 500, 502, 504] {
-            let d = LLMRefiner.decideRetry(statusCode: code, retryAfterHeader: "5", isRetry: false)
+            let d = LLMRefiner.decideRetry(
+                statusCode: code, retryAfterHeader: "5", isRetry: false, gatewayMode: quick)
             XCTAssertEqual(d, .giveUp, "status \(code) must not retry")
         }
     }
 
     /// A transport error yields no HTTP status → treated as non-503 → no retry.
     func testNilStatus_NeverRetries() {
-        let d = LLMRefiner.decideRetry(statusCode: nil, retryAfterHeader: "5", isRetry: false)
+        let d = LLMRefiner.decideRetry(
+            statusCode: nil, retryAfterHeader: "5", isRetry: false, gatewayMode: quick)
         XCTAssertEqual(d, .giveUp)
     }
 
@@ -105,15 +125,71 @@ final class LLMRefineRetryTests: XCTestCase {
 
     // MARK: - retry mode + bounds sanity
 
-    /// The retry must upgrade off the quick queue so it gets a real cold-load
-    /// budget; and the wait bounds must stay inside the 90s client timeout.
+    /// Direct equality (not `contains`) so a typo in the constant is caught: the
+    /// retry must upgrade off the quick queue, and the wait bounds must stay
+    /// inside the 90s client timeout.
     func testRetryConstants() {
-        XCTAssertNotEqual(LLMRefiner.retryGatewayMode, "quick")
-        XCTAssertTrue(["default", "batch"].contains(LLMRefiner.retryGatewayMode))
+        XCTAssertEqual(LLMRefiner.quickGatewayMode, "quick")
+        XCTAssertEqual(LLMRefiner.retryGatewayMode, "default")
+        XCTAssertNotEqual(LLMRefiner.retryGatewayMode, LLMRefiner.quickGatewayMode)
         XCTAssertLessThanOrEqual(LLMRefiner.maxRetryAfterSeconds, 90)
         XCTAssertLessThanOrEqual(
             LLMRefiner.defaultRetryAfterSeconds,
             LLMRefiner.maxRetryAfterSeconds
         )
+    }
+
+    // MARK: - cancel-safe retry scheduling (scheduleRetry × cancel race)
+
+    /// A retry armed for a superseded generation (cancel bumped it before arming)
+    /// never runs its body and never schedules a timer.
+    func testArmRetry_DroppedWhenGenerationAlreadyBumped() {
+        let refiner = LLMRefiner()
+        var scheduled = false
+        refiner.scheduleRetryAfter = { _, _ in scheduled = true }
+        let sendGeneration = refiner.currentGeneration
+        refiner.cancel()  // interrupt races in before the retry arms
+
+        var ran = false
+        refiner.armRetry(generation: sendGeneration, afterSeconds: 30) { ran = true }
+
+        XCTAssertFalse(scheduled, "superseded retry must not schedule a timer")
+        XCTAssertFalse(ran, "superseded retry body must not run")
+    }
+
+    /// A retry armed for the current generation schedules and, when its timer
+    /// fires with the generation still current, runs the body.
+    func testArmRetry_FiresWhenStillCurrent() {
+        let refiner = LLMRefiner()
+        var captured: DispatchWorkItem?
+        refiner.scheduleRetryAfter = { _, work in captured = work }
+
+        var ran = false
+        refiner.armRetry(generation: refiner.currentGeneration, afterSeconds: 30) { ran = true }
+        XCTAssertNotNil(captured, "current retry must be scheduled")
+        XCTAssertFalse(ran, "body must wait for the timer")
+
+        captured?.perform()
+        XCTAssertTrue(ran, "timer firing with an unchanged generation runs the body")
+    }
+
+    /// The inner guard: if the generation is bumped (interrupt) during the
+    /// Retry-After wait, the fired timer must NOT run the body — this is what
+    /// prevents a stale retry from hijacking the new job's `currentTask`.
+    func testExecuteRetryIfCurrent_DropsAfterInterruptDuringWait() {
+        let refiner = LLMRefiner()
+        let sendGeneration = refiner.currentGeneration
+        refiner.cancel()  // interrupt lands while the retry was "waiting"
+
+        var ran = false
+        refiner.executeRetryIfCurrent(generation: sendGeneration) { ran = true }
+        XCTAssertFalse(ran)
+    }
+
+    func testExecuteRetryIfCurrent_RunsWhenGenerationUnchanged() {
+        let refiner = LLMRefiner()
+        var ran = false
+        refiner.executeRetryIfCurrent(generation: refiner.currentGeneration) { ran = true }
+        XCTAssertTrue(ran)
     }
 }

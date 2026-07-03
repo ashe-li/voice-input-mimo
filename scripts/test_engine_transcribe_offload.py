@@ -188,12 +188,77 @@ def test_executor_exception_propagates_as_500(base: str) -> None:
     )
 
 
+def test_evict_serialized_with_inference(base: str) -> None:
+    """CRITICAL regression: /admin/evict must wait for an in-flight inference and
+    run its Metal trim on the dedicated inference thread (never racing it)."""
+    fake = FakeASR(delay=2.0)
+    srv.asr_model._model = fake
+    trim_threads: list[str] = []
+    orig_trim = srv.tracker.trim_metal_cache
+
+    def spy_trim() -> None:
+        trim_threads.append(threading.current_thread().name)
+        orig_trim()
+
+    srv.tracker.trim_metal_cache = spy_trim
+    try:
+        worker = threading.Thread(
+            target=lambda: httpx.post(
+                f"{base}/v1/audio/transcriptions", files=FILES, timeout=15
+            )
+        )
+        worker.start()
+        time.sleep(0.4)  # let the inference take the lock first
+        t0 = time.perf_counter()
+        r = httpx.post(f"{base}/admin/evict", timeout=15)
+        evict_elapsed = time.perf_counter() - t0
+        assert r.status_code == 200, f"/admin/evict status {r.status_code}"
+        assert evict_elapsed > 1.0, (
+            f"/admin/evict returned in {evict_elapsed:.2f}s — not serialized "
+            "behind the ~2s in-flight inference"
+        )
+        worker.join(timeout=15)
+        assert trim_threads, "Metal trim never ran during eviction"
+        assert all(n.startswith("mlx-infer") for n in trim_threads), (
+            f"Metal trim ran off the inference thread: {trim_threads}"
+        )
+    finally:
+        del srv.tracker.trim_metal_cache
+
+
+def test_post_work_runs_on_dedicated_thread(base: str) -> None:
+    """post-response trim + snapshot must run on the dedicated inference thread."""
+    srv.asr_model._model = FakeASR(delay=0.05)
+    threads: list[str] = []
+    orig = srv._collect_post_metrics
+
+    def spy() -> dict:
+        threads.append(threading.current_thread().name)
+        return orig()
+
+    srv._collect_post_metrics = spy
+    try:
+        r = httpx.post(f"{base}/v1/audio/transcriptions", files=FILES, timeout=15)
+        assert r.status_code == 200, f"transcribe status {r.status_code}"
+        deadline = time.time() + 5
+        while not threads and time.time() < deadline:
+            time.sleep(0.05)
+        assert threads, "post-response housekeeping never ran"
+        assert all(n.startswith("mlx-infer") for n in threads), (
+            f"post-response trim/snapshot ran off the inference thread: {threads}"
+        )
+    finally:
+        srv._collect_post_metrics = orig
+
+
 def main() -> int:
     tests = [
         test_health_stays_responsive_during_inference,
         test_concurrent_transcribes_are_serialized,
         test_inference_runs_on_dedicated_single_thread,
         test_executor_exception_propagates_as_500,
+        test_evict_serialized_with_inference,
+        test_post_work_runs_on_dedicated_thread,
     ]
     failed: list[tuple] = []
     with running_server(_free_port()) as base:

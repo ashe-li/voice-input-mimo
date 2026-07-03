@@ -111,6 +111,30 @@ final class LLMRefiner {
 
     private var currentTask: URLSessionDataTask?
 
+    /// The scheduled 503 retry, if one is pending its `Retry-After` wait. Held so
+    /// `cancel()` can drop it when an interrupting segment preempts the job —
+    /// otherwise the wait would fire a stale retry after the job was requeued.
+    /// Only touched on the main queue (see `scheduleRetry`).
+    private var pendingRetryWork: DispatchWorkItem?
+
+    /// Monotonic token bumped by `cancel()`. A 503 retry captures the value at
+    /// send time and only fires while it still matches — so an interrupt that
+    /// preempts the job drops the retry regardless of how it races the (background)
+    /// URLSession completion that decided to retry. Closes the scheduleRetry ×
+    /// cancel window where a stale retry could otherwise overwrite `currentTask`.
+    /// Main-queue only.
+    private var generation = 0
+
+    /// Test seam: send-time generation snapshot (use a fresh instance per test).
+    var currentGeneration: Int { generation }
+
+    /// Test seam for the retry timer — production defers on the main queue; tests
+    /// inject a synchronous / capturing variant so retry gating is verified
+    /// without a real `Retry-After` sleep. Only invoked on the main queue.
+    var scheduleRetryAfter: (TimeInterval, DispatchWorkItem) -> Void = { delay, work in
+        DispatchQueue.main.asyncAfter(deadline: .now() + delay, execute: work)
+    }
+
     // Hardcoded defaults are composed from `BuiltinPromptCatalog` so the legacy
     // fallback (used only when `PromptStore` has no active profile) stays in
     // sync with the catalog version. Single source of truth — `/no_think`
@@ -249,6 +273,80 @@ final class LLMRefiner {
             entries: glossaryEntries
         )
 
+        let resolvedModel = activeProfile?.modelOverride ?? model
+        let resolvedTemp = activeProfile?.temperature ?? (resolvedMode == .claudeCode ? 0.2 : 0.3)
+        // Structure mode produces multi-section Markdown documents — ~1500
+        // gives room for ~1250 tokens of actual content after Qwen3 reasoning
+        // overhead. Refine/ClaudeCode keep the original 600 cap (single-line
+        // outputs).
+        let resolvedMaxTokens = resolvedMode == .structure ? 1500 : 600
+
+        let suffixToAppend: String
+        if resolvedMode == .claudeCode {
+            suffixToAppend = activeProfile?.suffix ?? claudeCodeSuffix
+        } else {
+            suffixToAppend = ""
+        }
+
+        let attempt = RefineAttempt(
+            systemPrompt: systemPrompt,
+            text: text,
+            requestId: requestId,
+            model: resolvedModel,
+            temperature: resolvedTemp,
+            maxTokens: resolvedMaxTokens,
+            gatewayMode: Self.gatewayMode(for: resolvedMode),
+            modeLabel: resolvedMode.rawValue,
+            profileLabel: activeProfile?.id ?? "<none>",
+            suffixToAppend: suffixToAppend,
+            isRetry: false,
+            generation: generation
+        )
+        performRefineRequest(attempt, completion: completion)
+    }
+
+    /// Immutable per-attempt parameters for one refine HTTP send. Bundled so the
+    /// send path and its one-shot retry share a single value rather than an
+    /// 11-argument call, and so `performRefineRequest` stays small.
+    struct RefineAttempt {
+        let systemPrompt: String
+        let text: String
+        let requestId: String
+        let model: String
+        let temperature: Double
+        let maxTokens: Int
+        let gatewayMode: String
+        let modeLabel: String
+        let profileLabel: String
+        let suffixToAppend: String
+        let isRetry: Bool
+        /// Send-time generation; preserved across the retry so a superseded job's
+        /// retry is still dropped by the generation guard.
+        let generation: Int
+
+        /// The one-shot retry: same request re-sent via the default (non-quick)
+        /// queue with `isRetry` set.
+        func retryAttempt() -> RefineAttempt {
+            RefineAttempt(
+                systemPrompt: systemPrompt, text: text, requestId: requestId,
+                model: model, temperature: temperature, maxTokens: maxTokens,
+                gatewayMode: LLMRefiner.retryGatewayMode, modeLabel: modeLabel,
+                profileLabel: profileLabel, suffixToAppend: suffixToAppend,
+                isRetry: true, generation: generation
+            )
+        }
+    }
+
+    /// Build and send one refine attempt. The 503-triggered retry / response
+    /// handling lives in `handleCompletion` so this stays focused on send.
+    ///
+    /// Retry state (`currentTask`, `pendingRetryWork`, `generation`) is mutated
+    /// only on the main queue — the job queue drives refine on main and `cancel()`
+    /// runs on main, so there is no cross-thread race with an interrupting segment.
+    private func performRefineRequest(
+        _ attempt: RefineAttempt,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
         guard let url = URL(string: "\(normalizedBaseURL())/chat/completions") else {
             completion(.failure(RefinerError.invalidURL))
             return
@@ -258,91 +356,166 @@ final class LLMRefiner {
         request.httpMethod = "POST"
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        if !requestId.isEmpty {
-            request.setValue(requestId, forHTTPHeaderField: "X-Request-Id")
+        if !attempt.requestId.isEmpty {
+            request.setValue(attempt.requestId, forHTTPHeaderField: "X-Request-Id")
         }
         request.timeoutInterval = 90  // Qwen3 reasoning models can take 30s+ per inference
+        request.httpBody = try? JSONSerialization.data(withJSONObject: Self.requestBody(for: attempt))
 
-        let resolvedModel = activeProfile?.modelOverride ?? model
-        let resolvedTemp = activeProfile?.temperature ?? (resolvedMode == .claudeCode ? 0.2 : 0.3)
-        // Structure mode produces multi-section Markdown documents — ~1500
-        // gives room for ~1250 tokens of actual content after Qwen3 reasoning
-        // overhead. Refine/ClaudeCode keep the original 600 cap (single-line
-        // outputs).
-        let resolvedMaxTokens = resolvedMode == .structure ? 1500 : 600
+        let logTag = attempt.requestId.isEmpty ? "" : "[req=\(attempt.requestId)] "
+        logger.debug("\(logTag)Request: \(url.absoluteString) model=\(attempt.model) mode=\(attempt.gatewayMode) profile=\(attempt.profileLabel) retry=\(attempt.isRetry)")
 
-        let body: [String: Any] = [
-            "model": resolvedModel,
-            "messages": [
-                ["role": "system", "content": systemPrompt],
-                ["role": "user", "content": text],
-            ],
-            "temperature": resolvedTemp,
-            "max_tokens": resolvedMaxTokens,
-            "mode": Self.gatewayMode(for: resolvedMode),
-        ]
-
-        let logTag = requestId.isEmpty ? "" : "[req=\(requestId)] "
-        logger.debug("\(logTag)Request: \(url.absoluteString) model=\(resolvedModel) mode=\(resolvedMode.rawValue) profile=\(activeProfile?.id ?? "<none>")")
-        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
-
-        let suffixToAppend: String
-        if resolvedMode == .claudeCode {
-            suffixToAppend = activeProfile?.suffix ?? claudeCodeSuffix
-        } else {
-            suffixToAppend = ""
-        }
-
-        currentTask = URLSession.shared.dataTask(with: request) { data, _, error in
-            // Cancelled mid-flight: caller (RecordingJobQueue) will resume
-            // this job later. Don't fire completion — the JobRunner callback
-            // would stopPhaseTimer / mutate overlay state belonging to the
-            // new in-flight segment.
-            let nsErr = error as NSError?
-            if nsErr?.code == NSURLErrorCancelled {
-                return
-            }
-            if let error {
-                logger.error("\(logTag)Network error: \(error.localizedDescription)")
-                DispatchQueue.main.async { completion(.failure(error)) }
-                return
-            }
-            guard let data else {
-                logger.error("\(logTag)No data in response")
-                DispatchQueue.main.async { completion(.failure(RefinerError.invalidResponse)) }
-                return
-            }
-            if let raw = String(data: data, encoding: .utf8) {
-                logger.debug("\(logTag)Response: \(raw)")
-            }
-            guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  let choices = json["choices"] as? [[String: Any]],
-                  let message = choices.first?["message"] as? [String: Any]
-            else {
-                logger.error("\(logTag)Failed to parse response")
-                DispatchQueue.main.async { completion(.failure(RefinerError.invalidResponse)) }
-                return
-            }
-            // Qwen3 reasoning models put the actual answer in `content` but if
-            // max_tokens cut off mid-thinking, content may be empty — log usage
-            // so we can detect that case.
-            let content = (message["content"] as? String) ?? ""
-            if content.isEmpty {
-                let usage = json["usage"] as? [String: Any]
-                let finishReason = (choices.first?["finish_reason"] as? String) ?? "?"
-                logger.warning("\(logTag)empty content. finish=\(finishReason) usage=\(String(describing: usage ?? [:]))")
-            }
-            let refined = content.trimmingCharacters(in: .whitespacesAndNewlines)
-            let finalText = suffixToAppend.isEmpty ? refined : "\(refined)\(suffixToAppend)"
-            logger.debug("\(logTag)Refined (\(resolvedMode.rawValue)): '\(text)' -> '\(refined)' (suffix=\(suffixToAppend.count) chars)")
-            DispatchQueue.main.async { completion(.success(finalText)) }
+        currentTask = URLSession.shared.dataTask(with: request) { [weak self] data, response, error in
+            self?.handleCompletion(
+                attempt: attempt, data: data, response: response, error: error,
+                logTag: logTag, completion: completion
+            )
         }
         currentTask?.resume()
     }
 
+    private static func requestBody(for attempt: RefineAttempt) -> [String: Any] {
+        [
+            "model": attempt.model,
+            "messages": [
+                ["role": "system", "content": attempt.systemPrompt],
+                ["role": "user", "content": attempt.text],
+            ],
+            "temperature": attempt.temperature,
+            "max_tokens": attempt.maxTokens,
+            "mode": attempt.gatewayMode,
+        ]
+    }
+
+    /// URLSession completion (background queue): decide 503 retry vs terminal
+    /// response. A gateway 503 on a first quick attempt schedules the one-shot
+    /// retry; everything else falls through to `handleRefineResponse` → raw-ASR
+    /// fallback in AppDelegate.
+    private func handleCompletion(
+        attempt: RefineAttempt,
+        data: Data?,
+        response: URLResponse?,
+        error: Error?,
+        logTag: String,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        // Cancelled mid-flight: caller (RecordingJobQueue) will resume this job
+        // later. Don't fire completion — the JobRunner callback would mutate
+        // overlay state belonging to the new in-flight segment.
+        let nsErr = error as NSError?
+        if nsErr?.code == NSURLErrorCancelled { return }
+
+        let http = response as? HTTPURLResponse
+        let decision = Self.decideRetry(
+            statusCode: http?.statusCode,
+            retryAfterHeader: http?.value(forHTTPHeaderField: "Retry-After"),
+            isRetry: attempt.isRetry,
+            gatewayMode: attempt.gatewayMode
+        )
+        if case .retry(let afterSeconds) = decision {
+            // .notice (not .debug): os.Logger drops debug by default, and this is
+            // the only signal that the S2.2 cold-load retry actually engaged.
+            logger.notice("\(logTag)gateway 503 — retrying once via \(Self.retryGatewayMode) after \(afterSeconds)s")
+            let retry = attempt.retryAttempt()
+            scheduleRetry(generation: attempt.generation, afterSeconds: afterSeconds) { [weak self] in
+                self?.performRefineRequest(retry, completion: completion)
+            }
+            return
+        }
+        Self.handleRefineResponse(
+            data: data, error: error, suffixToAppend: attempt.suffixToAppend,
+            modeLabel: attempt.modeLabel, text: attempt.text, logTag: logTag, completion: completion
+        )
+    }
+
+    /// Parse a chat-completions response and fire `completion` on the main queue.
+    /// Extracted from the request closure so `performRefineRequest` stays focused
+    /// on send + retry orchestration. No instance state — the file-level `logger`
+    /// is global — so it stays a static helper.
+    private static func handleRefineResponse(
+        data: Data?,
+        error: Error?,
+        suffixToAppend: String,
+        modeLabel: String,
+        text: String,
+        logTag: String,
+        completion: @escaping (Result<String, Error>) -> Void
+    ) {
+        if let error {
+            logger.error("\(logTag)Network error: \(error.localizedDescription)")
+            DispatchQueue.main.async { completion(.failure(error)) }
+            return
+        }
+        guard let data else {
+            logger.error("\(logTag)No data in response")
+            DispatchQueue.main.async { completion(.failure(RefinerError.invalidResponse)) }
+            return
+        }
+        if let raw = String(data: data, encoding: .utf8) {
+            logger.debug("\(logTag)Response: \(raw)")
+        }
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let choices = json["choices"] as? [[String: Any]],
+              let message = choices.first?["message"] as? [String: Any]
+        else {
+            logger.error("\(logTag)Failed to parse response")
+            DispatchQueue.main.async { completion(.failure(RefinerError.invalidResponse)) }
+            return
+        }
+        // Qwen3 reasoning models put the actual answer in `content` but if
+        // max_tokens cut off mid-thinking, content may be empty — log usage
+        // so we can detect that case.
+        let content = (message["content"] as? String) ?? ""
+        if content.isEmpty {
+            let usage = json["usage"] as? [String: Any]
+            let finishReason = (choices.first?["finish_reason"] as? String) ?? "?"
+            logger.warning("\(logTag)empty content. finish=\(finishReason) usage=\(String(describing: usage ?? [:]))")
+        }
+        let refined = content.trimmingCharacters(in: .whitespacesAndNewlines)
+        let finalText = suffixToAppend.isEmpty ? refined : "\(refined)\(suffixToAppend)"
+        logger.debug("\(logTag)Refined (\(modeLabel)): '\(text)' -> '\(refined)' (suffix=\(suffixToAppend.count) chars)")
+        DispatchQueue.main.async { completion(.success(finalText)) }
+    }
+
+    /// Hop the 503 retry onto the main queue, then arm it. The whole
+    /// "check generation + set pendingRetryWork + schedule" runs in one main-queue
+    /// turn, so a `cancel()` that raced the (background) completion is seen either
+    /// before arming (generation guard drops it) or after (it cancelled the work /
+    /// bumped the generation). Either ordering is caught.
+    private func scheduleRetry(generation: Int, afterSeconds: TimeInterval, _ body: @escaping () -> Void) {
+        DispatchQueue.main.async { [weak self] in
+            self?.armRetry(generation: generation, afterSeconds: afterSeconds, body)
+        }
+    }
+
+    /// Arm the single retry on the main queue. If `cancel()` already bumped the
+    /// generation, the retry is dropped here; otherwise the deferred work re-checks
+    /// the generation before running `body`, so an interrupt during the wait also
+    /// drops it. Internal for tests (see `scheduleRetryAfter`).
+    func armRetry(generation: Int, afterSeconds: TimeInterval, _ body: @escaping () -> Void) {
+        guard generation == self.generation else { return }  // superseded before arming
+        let work = DispatchWorkItem { [weak self] in
+            self?.executeRetryIfCurrent(generation: generation, body)
+        }
+        pendingRetryWork = work
+        scheduleRetryAfter(afterSeconds, work)
+    }
+
+    /// Run `body` only if the send-time `generation` is still current — i.e. no
+    /// `cancel()` / interrupt happened since. Internal for tests.
+    func executeRetryIfCurrent(generation: Int, _ body: () -> Void) {
+        guard generation == self.generation else { return }  // superseded during wait
+        body()
+    }
+
     func cancel() {
+        // Bump first: invalidates any in-flight retry (armed or mid-schedule) even
+        // if it races this call on the main queue.
+        generation &+= 1
         currentTask?.cancel()
         currentTask = nil
+        pendingRetryWork?.cancel()
+        pendingRetryWork = nil
     }
 
     // MARK: - Mode dispatch
@@ -435,6 +608,150 @@ final class LLMRefiner {
             // "quick" queue if the dispatcher ever leaks through.
             return "quick"
         }
+    }
+
+    // MARK: - Cold-load warmup
+
+    /// Gateway queue for the warmup probe. Deliberately NOT `quick`: quick's 5s
+    /// gateway timeout aborts a Rapid-MLX cold load (heavy cold ≥14–25s) — the
+    /// exact case warmup exists to hide. `default` (30s gateway queue) covers the
+    /// observed cold-load range; the residual >30s tail is handled downstream by
+    /// the gateway-503 + single-retry path, not here.
+    static let warmUpGatewayMode = "default"
+
+    /// Client-side timeout for the warmup request. Longer than `default`'s 30s
+    /// gateway timeout so the client never gives up before the gateway returns
+    /// (success or a 503 the caller can act on), while still bounding a hung probe.
+    static let warmUpTimeoutSeconds: TimeInterval = 60
+
+    /// Minimal user content for the warmup probe. One token in / one token out is
+    /// enough to force the backend to load the model without paying for real
+    /// generation.
+    private static let warmUpProbeContent = "hi"
+
+    /// Output cap for the warmup probe — a single token forces a model load with
+    /// no real generation.
+    static let warmUpMaxTokens = 1
+
+    /// Build the warmup request: a minimal `max_tokens: 1` chat completion routed
+    /// through the non-quick gateway queue. Pure/synchronous so the request shape
+    /// (mode, timeout, max_tokens) is unit-testable without the network. Returns
+    /// nil only when the configured base URL is malformed.
+    func makeWarmUpRequest() -> URLRequest? {
+        guard let url = URL(string: "\(normalizedBaseURL())/chat/completions") else {
+            return nil
+        }
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.timeoutInterval = Self.warmUpTimeoutSeconds
+        let body: [String: Any] = [
+            "model": model,
+            "messages": [["role": "user", "content": Self.warmUpProbeContent]],
+            "max_tokens": Self.warmUpMaxTokens,
+            "mode": Self.warmUpGatewayMode,
+        ]
+        request.httpBody = try? JSONSerialization.data(withJSONObject: body)
+        return request
+    }
+
+    /// Whether a warmup response confirms the backend is now hot. Only a 2xx
+    /// counts: a gateway 503 (still cold / not ready) or any transport error must
+    /// NOT stamp the freshness clock, so the next record-start retries. Pure —
+    /// unit-tested in place of the fire-and-forget network wiring.
+    static func warmUpSucceeded(statusCode: Int?, error: Error?) -> Bool {
+        if error != nil { return false }
+        guard let statusCode else { return false }
+        return (200..<300).contains(statusCode)
+    }
+
+    /// Fire a fire-and-forget warmup probe to pull the LLM backend hot during the
+    /// recording+ASR window, so the first refine after a Rapid-MLX process restart
+    /// isn't aborted mid-cold-load. Uses its own URLSession task (NOT `currentTask`)
+    /// so it can never be cancelled by — or cancel — an in-flight refine; the two
+    /// are independent requests the gateway queues on its own side. `onSuccess`
+    /// runs on the main queue after a confirmed-hot (2xx) response; failures are
+    /// logged and swallowed so they never surface to the user or block recording.
+    func warmUp(onSuccess: (() -> Void)? = nil) {
+        guard isEnabled, isConfigured else { return }
+        guard let request = makeWarmUpRequest() else {
+            logger.error("warmUp skipped: invalid base URL")
+            return
+        }
+        URLSession.shared.dataTask(with: request) { _, response, error in
+            let status = (response as? HTTPURLResponse)?.statusCode
+            if Self.warmUpSucceeded(statusCode: status, error: error) {
+                logger.debug("warmUp ok (backend hot)")
+                DispatchQueue.main.async { onSuccess?() }
+            } else if let error {
+                logger.debug("warmUp failed (benign): \(error.localizedDescription)")
+            } else {
+                logger.debug("warmUp non-2xx (benign): status=\(status ?? -1)")
+            }
+        }.resume()
+    }
+
+    // MARK: - 503-triggered single retry
+
+    /// Gateway queue for the 503 retry. Same rationale as `warmUpGatewayMode`:
+    /// upgrade off `quick` (whose 5s abort caused the 503 fast-fail) to `default`
+    /// so the retry gets the 30s budget to ride the residual cold load.
+    static let retryGatewayMode = "default"
+
+    /// Gateway queue whose 5s budget the cold-load retry exists to protect. Only
+    /// a 503 on this queue triggers a retry (see `decideRetry`).
+    static let quickGatewayMode = "quick"
+
+    /// Wait applied when the gateway 503s without a usable `Retry-After`. Sized
+    /// to the light-cold reload; the retry itself then has the 30s default-queue
+    /// budget on top.
+    static let defaultRetryAfterSeconds: TimeInterval = 15
+
+    /// Upper bound on the honored `Retry-After`. A buggy / hostile gateway must
+    /// not stall refine for minutes — and the wait plus a 30s retry must stay
+    /// well inside the 90s client timeout.
+    static let maxRetryAfterSeconds: TimeInterval = 30
+
+    /// Outcome of the single-retry decision for a refine response. Extracted so
+    /// the retry gating is unit-testable without the network.
+    enum RefineRetryDecision: Equatable {
+        case retry(afterSeconds: TimeInterval)
+        case giveUp
+    }
+
+    /// Decide whether a refine response should trigger the one-shot retry. Retries
+    /// only a gateway 503 on the FIRST attempt of a QUICK-queue request; everything
+    /// else gives up so the caller falls through to the raw-ASR fallback:
+    ///   - already retried → bounds the retry to exactly one (no storm)
+    ///   - non-503 / no HTTP status → not the cold fast-fail (5s-abort timeout
+    ///     surfaces as a URLError with no 503 and must not retry)
+    ///   - non-quick queue → the mechanism is for quick's 5s budget; default(30s)
+    ///     gains nothing by retrying as default, and structure(batch/60s) would be
+    ///     downgraded to the 30s default queue. Their 503s take the failure path.
+    static func decideRetry(
+        statusCode: Int?,
+        retryAfterHeader: String?,
+        isRetry: Bool,
+        gatewayMode: String
+    ) -> RefineRetryDecision {
+        guard !isRetry else { return .giveUp }
+        guard gatewayMode == quickGatewayMode else { return .giveUp }
+        guard statusCode == 503 else { return .giveUp }
+        return .retry(afterSeconds: parseRetryAfter(retryAfterHeader))
+    }
+
+    /// Parse a `Retry-After` delta-seconds value, defensively. Missing /
+    /// non-numeric (including the HTTP-date form we don't support) and negative
+    /// values fall back to the default wait; oversized values clamp to the upper
+    /// bound. Never throws — always yields a usable, bounded delay.
+    static func parseRetryAfter(_ header: String?) -> TimeInterval {
+        guard let raw = header?.trimmingCharacters(in: .whitespaces),
+              let seconds = TimeInterval(raw), seconds >= 0
+        else {
+            return defaultRetryAfterSeconds
+        }
+        return min(seconds, maxRetryAfterSeconds)
     }
 
     // MARK: - System prompt resolution

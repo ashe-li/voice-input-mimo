@@ -133,7 +133,26 @@ class LazyModel:
             return self._idle_window.should_evict()
         return self.time_since_use() >= (self._idle_seconds or float("inf"))
 
-    async def idle_check_loop(self, check_interval: float = 5.0) -> None:
+    async def _guarded_evict(self, evict_guard: Optional[asyncio.Lock]) -> None:
+        """Evict, optionally serialized behind a caller-supplied lock.
+
+        The engine passes its inference lock so an idle eviction (which trims the
+        Metal cache) never runs concurrently with an in-flight transcription.
+        Expiry is re-checked under the lock: if a request landed while we waited,
+        the model was just used and must not be evicted.
+        """
+        if evict_guard is None:
+            await self.evict()
+            return
+        async with evict_guard:
+            if self._expired():
+                await self.evict()
+
+    async def idle_check_loop(
+        self,
+        check_interval: float = 5.0,
+        evict_guard: Optional[asyncio.Lock] = None,
+    ) -> None:
         if self._idle_window is not None:
             log.info(
                 f"[{self._name}] idle_check_loop started "
@@ -150,7 +169,7 @@ class LazyModel:
             while True:
                 await asyncio.sleep(check_interval)
                 if self._expired():
-                    await self.evict()
+                    await self._guarded_evict(evict_guard)
         except asyncio.CancelledError:
             log.info(f"[{self._name}] idle_check_loop cancelled")
             raise

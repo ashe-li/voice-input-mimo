@@ -20,6 +20,8 @@ Engine-only:
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import functools
 import json
 import logging
 import os
@@ -58,6 +60,11 @@ ZHTW_RULESET_PATH = Path(os.environ.get(
 ))
 
 METAL_CACHE_LIMIT_MB = int(os.environ.get("ENGINE_METAL_CACHE_LIMIT_MB", "1024"))
+
+# Max seconds to wait for in-flight post-response audit tasks to finish on
+# shutdown before giving up, so a normal shutdown flushes their JSONL records
+# instead of dropping them (a stuck task still can't hang teardown forever).
+POST_WORK_DRAIN_TIMEOUT_S = float(os.environ.get("ENGINE_POST_WORK_DRAIN_TIMEOUT_S", "10"))
 
 # Reject audio uploads larger than this. Localhost-bound but defense-in-depth.
 MAX_AUDIO_BYTES = int(os.environ.get("ENGINE_MAX_AUDIO_BYTES", str(50 * 1024 * 1024)))
@@ -182,6 +189,37 @@ def _post_process(text: str, locale: str) -> str:
 
 tracker = MemoryTracker()
 
+
+def _collect_post_metrics() -> dict:
+    """Metal cache trim + memory snapshot — blocking, kept off the event loop.
+
+    trim_metal_cache touches Metal so it rides the dedicated inference thread;
+    snapshot has no thread affinity but rides along to keep post-response
+    housekeeping a single executor hop.
+    """
+    tracker.trim_metal_cache()
+    return tracker.snapshot()
+
+
+async def _evict_trim_on_infer_thread() -> None:
+    """LazyModel on_evict hook — pin the Metal cache trim to the inference thread.
+
+    evict() can fire from idle_check_loop or /admin/evict on the event-loop
+    thread; running mx.metal.clear_cache() there would race an in-flight
+    transcription on the mlx-infer thread. Hopping onto that same single-worker
+    executor serializes the trim behind inference by construction, matching the
+    transcribe + shutdown paths. Falls back to a direct call when the executor
+    is not up (eviction outside an app lifespan, e.g. isolated tests). `app` is
+    resolved lazily at call time, so the forward reference is safe.
+    """
+    executor = getattr(app.state, "infer_executor", None)
+    if executor is None:
+        tracker.trim_metal_cache()
+        return
+    loop = asyncio.get_running_loop()
+    await loop.run_in_executor(executor, tracker.trim_metal_cache)
+
+
 asr_idle_window = AdaptiveIdleWindow(
     ladder_seconds=IDLE_LADDER,
     hard_ceiling_seconds=IDLE_HARD_CEILING,
@@ -190,7 +228,7 @@ asr_model = LazyModel(
     name="asr",
     loader=_load_mimo_asr,
     idle_window=asr_idle_window,
-    on_evict=tracker.trim_metal_cache,
+    on_evict=_evict_trim_on_infer_thread,
 )
 
 qwen_idle_window = AdaptiveIdleWindow(
@@ -211,8 +249,23 @@ qwen_manager: Optional[RemoteQwenCacheManager] = (
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     tracker.set_metal_cache_limit_mb(METAL_CACHE_LIMIT_MB)
+    # Dedicated single-thread executor for MLX inference. A private pool (not the
+    # shared default threadpool behind asyncio.to_thread) guarantees every
+    # transcription runs on the same OS thread — MLX + Metal have thread-affinity
+    # quirks — while the Lock serializes callers so only one inference is ever in
+    # flight. Both live off the event loop so /v1/health stays answerable mid-run.
+    app.state.infer_executor = concurrent.futures.ThreadPoolExecutor(
+        max_workers=1, thread_name_prefix="mlx-infer"
+    )
+    app.state.infer_lock = asyncio.Lock()
+    # Live post-response audit tasks, drained on shutdown so no JSONL record is
+    # lost. Tasks add/remove themselves via a done-callback.
+    app.state.post_work_tasks = set()
     idle_task = asyncio.create_task(
-        asr_model.idle_check_loop(check_interval=IDLE_CHECK_INTERVAL)
+        asr_model.idle_check_loop(
+            check_interval=IDLE_CHECK_INTERVAL,
+            evict_guard=app.state.infer_lock,
+        )
     )
     qwen_task = None
     if qwen_manager is not None:
@@ -239,7 +292,24 @@ async def lifespan(app: FastAPI):
                 await task
             except (asyncio.CancelledError, Exception):
                 pass
-        await asr_model.evict()
+        # Flush in-flight post-response audit tasks before tearing down the pool
+        # so their emit_request_jsonl runs — otherwise a task still awaiting its
+        # executor future when the loop stops loses that record silently.
+        pending = list(app.state.post_work_tasks)
+        if pending:
+            _, unfinished = await asyncio.wait(pending, timeout=POST_WORK_DRAIN_TIMEOUT_S)
+            if unfinished:
+                log.warning(
+                    f"{len(unfinished)} post-response audit task(s) unfinished at "
+                    "shutdown — records may be missing"
+                )
+        # Evict under the inference lock (same one transcribe/idle use), then
+        # drain and close the pool. Order matters: evict()'s Metal trim hops onto
+        # infer_executor, so the pool must still be alive here — shut it down only
+        # after the trim has run.
+        async with app.state.infer_lock:
+            await asr_model.evict()
+        app.state.infer_executor.shutdown(wait=True)
         log.info("engine stopped")
 
 
@@ -282,6 +352,7 @@ async def transcribe(
         or ""
     ).strip() or f"engine-{int(time.time()*1000)}"
     received_at = time.time()
+    loop = asyncio.get_running_loop()
     raw = await file.read()
     if len(raw) > MAX_AUDIO_BYTES:
         raise HTTPException(
@@ -323,10 +394,17 @@ async def transcribe(
             log.warning(f"[req={request_id}] Unknown language {lang!r} → auto")
             lang = "auto"
 
-        asr = await asr_model.get()
-        t0 = time.perf_counter()
-        raw_text = asr.transcribe(str(tmp_path), language=lang)
-        asr_elapsed = time.perf_counter() - t0
+        # Serialize inference (belt-and-suspenders alongside the single-worker
+        # executor) and run the blocking MLX call off the event loop so
+        # /v1/health stays responsive while a transcription is in flight.
+        async with request.app.state.infer_lock:
+            asr = await asr_model.get()
+            t0 = time.perf_counter()
+            raw_text = await loop.run_in_executor(
+                request.app.state.infer_executor,
+                functools.partial(asr.transcribe, str(tmp_path), language=lang),
+            )
+            asr_elapsed = time.perf_counter() - t0
 
         locale = output_locale or "zh-TW"
         if locale.lower() == "zh-tw":
@@ -391,14 +469,29 @@ async def transcribe(
             "asr_idle_window_s": idle_status["current_window_seconds"] if idle_status else None,
         }
 
-        async def _post_response_work():
-            tracker.trim_metal_cache()
-            snap = tracker.snapshot()
-            jsonl_payload["phys_mb"] = snap.get("phys_mb")
-            jsonl_payload["rss_mb"] = snap.get("rss_mb")
+        # Enqueue the housekeeping on the inference executor *now*, before this
+        # handler yields, so it lands ahead of the next request's inference
+        # instead of being starved behind it under continuous load. The submit
+        # is synchronous; a tiny background task only awaits the result and
+        # writes the jsonl, so the response still flushes without waiting.
+        post_future = loop.run_in_executor(
+            request.app.state.infer_executor, _collect_post_metrics
+        )
+
+        async def _finish_post_response_work():
+            try:
+                snap = await post_future
+                jsonl_payload["phys_mb"] = snap.get("phys_mb")
+                jsonl_payload["rss_mb"] = snap.get("rss_mb")
+            except Exception:  # noqa: BLE001
+                log.exception(f"[req={request_id}] post-response metrics failed")
             emit_request_jsonl(jsonl_payload)
 
-        asyncio.create_task(_post_response_work())
+        post_task = asyncio.create_task(_finish_post_response_work())
+        # Register so a normal shutdown can wait for the audit write to finish.
+        post_tasks = request.app.state.post_work_tasks
+        post_tasks.add(post_task)
+        post_task.add_done_callback(post_tasks.discard)
 
 
 @app.get("/admin/memory")
@@ -413,7 +506,10 @@ def admin_memory():
 
 @app.post("/admin/evict")
 async def admin_evict():
-    await asr_model.evict()
+    # Serialize with transcribe so the eviction's Metal trim never races an
+    # in-flight inference on the mlx-infer thread.
+    async with app.state.infer_lock:
+        await asr_model.evict()
     return {
         "evicted": True,
         "after": {

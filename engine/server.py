@@ -37,6 +37,7 @@ from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from engine.adaptive_idle import AdaptiveIdleWindow
+from engine.asr_budget import GenerationStats, compute_max_new_tokens, transcribe_with_budget
 from engine.lifecycle import LazyModel
 from engine.logsetup import emit_request_jsonl, setup_logging
 from engine.memory import MemoryTracker
@@ -374,6 +375,7 @@ async def transcribe(
     err: Optional[str] = None
     asr_elapsed = 0.0
     cc_elapsed = 0.0
+    gen_stats = GenerationStats(requested_max_new_tokens=compute_max_new_tokens(None))
 
     try:
         try:
@@ -397,14 +399,24 @@ async def transcribe(
         # Serialize inference (belt-and-suspenders alongside the single-worker
         # executor) and run the blocking MLX call off the event loop so
         # /v1/health stays responsive while a transcription is in flight.
+        # The decode cap scales with audio length (see engine/asr_budget.py);
+        # mimo_mlx hard-codes 256 steps, which truncates speech past ~60-90 s.
+        max_new_tokens = compute_max_new_tokens(audio_duration_s)
         async with request.app.state.infer_lock:
             asr = await asr_model.get()
             t0 = time.perf_counter()
-            raw_text = await loop.run_in_executor(
+            raw_text, gen_stats = await loop.run_in_executor(
                 request.app.state.infer_executor,
-                functools.partial(asr.transcribe, str(tmp_path), language=lang),
+                functools.partial(
+                    transcribe_with_budget, asr, str(tmp_path), lang, max_new_tokens
+                ),
             )
             asr_elapsed = time.perf_counter() - t0
+        if gen_stats.hit_cap:
+            log.warning(
+                "[req=%s] ASR decode hit cap (%s steps, %.1fs audio) — text likely truncated",
+                request_id, gen_stats.max_new_tokens, audio_duration_s or -1.0,
+            )
 
         locale = output_locale or "zh-TW"
         if locale.lower() == "zh-tw":
@@ -429,6 +441,7 @@ async def transcribe(
             "output_locale": locale,
             "duration_ms": int((asr_elapsed + cc_elapsed) * 1000),
             "request_id": request_id,
+            **gen_stats.as_log_fields(),
         }
     except Exception as e:
         err = f"{type(e).__name__}: {e}"
@@ -465,6 +478,7 @@ async def transcribe(
             "raw_text": _redact(raw_text),
             "text": _redact(text),
             "error": err,
+            **gen_stats.as_log_fields(),
             "asr_idle_level": idle_status["level"] if idle_status else None,
             "asr_idle_window_s": idle_status["current_window_seconds"] if idle_status else None,
         }

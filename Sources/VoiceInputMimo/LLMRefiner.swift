@@ -275,11 +275,7 @@ final class LLMRefiner {
 
         let resolvedModel = activeProfile?.modelOverride ?? model
         let resolvedTemp = activeProfile?.temperature ?? (resolvedMode == .claudeCode ? 0.2 : 0.3)
-        // Structure mode produces multi-section Markdown documents — ~1500
-        // gives room for ~1250 tokens of actual content after Qwen3 reasoning
-        // overhead. Refine/ClaudeCode keep the original 600 cap (single-line
-        // outputs).
-        let resolvedMaxTokens = resolvedMode == .structure ? 1500 : 600
+        let resolvedMaxTokens = Self.maxTokens(for: resolvedMode, inputText: text)
 
         let suffixToAppend: String
         if resolvedMode == .claudeCode {
@@ -595,6 +591,37 @@ final class LLMRefiner {
             matchedPrefix: match.prefix,
             dispatchedTo: dispatchedTo
         )
+    }
+
+    // MARK: - Output budget
+
+    /// Per-mode output floor. Structure mode produces multi-section Markdown —
+    /// ~1500 gives room for ~1250 tokens of content after Qwen3 reasoning
+    /// overhead. Refine/ClaudeCode keep the original 600 for short utterances.
+    static let structureMaxTokensFloor = 1500
+    static let defaultMaxTokensFloor = 600
+
+    /// Output tokens budgeted per input character. A CJK character is at most
+    /// ~1 token in and out, and the Chinese→English translation observed on
+    /// 400–1000-char dictations runs ~0.5–0.6 tokens per source char, so 1.5×
+    /// leaves headroom for cleanup rewrites without letting a long dictation
+    /// hit the cap mid-sentence.
+    static let maxTokensPerInputChar = 1.5
+
+    /// Fixed slack on top of the per-char budget (residual reasoning / suffix).
+    static let maxTokensOverhead = 256
+
+    /// Hard ceiling so a runaway generation stays bounded.
+    static let maxTokensCeiling = 4096
+
+    /// `max_tokens` for one refine call. Long dictation (ASR now returns the
+    /// full multi-minute transcript) must not be truncated by a fixed 600-token
+    /// cap, so the budget scales with input length above the per-mode floor.
+    static func maxTokens(for mode: RefineMode, inputText: String) -> Int {
+        let floor = mode == .structure ? structureMaxTokensFloor : defaultMaxTokensFloor
+        let scaled = Int((Double(inputText.count) * maxTokensPerInputChar).rounded(.up))
+            + maxTokensOverhead
+        return min(maxTokensCeiling, max(floor, scaled))
     }
 
     static func gatewayMode(for refineMode: RefineMode) -> String {

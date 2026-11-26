@@ -61,16 +61,16 @@ final class ASRClient {
         let requestId = wavURL.deletingPathExtension().lastPathComponent
 
         let boundary = "----VoiceInputMimo-\(UUID().uuidString)"
-        var request = URLRequest(url: url)
-        request.httpMethod = "POST"
-        request.timeoutInterval = 60
-        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
-        request.setValue(requestId, forHTTPHeaderField: "X-Request-Id")
-
         guard let audioData = try? Data(contentsOf: wavURL) else {
             completion(.failure(ASRError.fileReadFailed))
             return
         }
+
+        var request = URLRequest(url: url)
+        request.httpMethod = "POST"
+        request.timeoutInterval = Self.requestTimeout(audioBytes: audioData.count)
+        request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
+        request.setValue(requestId, forHTTPHeaderField: "X-Request-Id")
 
         var body = Data()
         let crlf = "\r\n"
@@ -91,7 +91,7 @@ final class ASRClient {
         // form fields
         appendField("language", language)
         appendField("output_locale", outputLocale)
-        appendField("mode", "quick")
+        appendField("mode", Self.gatewayMode(audioBytes: audioData.count))
 
         // close
         body.append("--\(boundary)--\(crlf)".data(using: .utf8)!)
@@ -158,6 +158,59 @@ final class ASRClient {
     func cancel() {
         currentTask?.cancel()
         currentTask = nil
+    }
+
+    // MARK: - Request timeout
+
+    /// Bytes per second of the recorder's 16 kHz mono 16-bit PCM WAV
+    /// (see AudioRecorder settings).
+    static let wavBytesPerSecond = 32_000
+
+    /// Canonical RIFF/WAVE header size, excluded from the duration estimate.
+    static let wavHeaderBytes = 44
+
+    /// Floor = the previous fixed timeout; short clips keep today's behavior.
+    static let minRequestTimeout: TimeInterval = 60
+
+    /// Client seconds allowed per second of audio. The engine now scales its
+    /// decode cap with duration (~6 steps/s), so a long clip legitimately runs
+    /// longer than 60 s: measured ~0.13 s per audio second on a natural stop,
+    /// and a greedy loop that runs to the cap costs several times that. 0.75 s/s
+    /// on top of the floor covers the capped worst case plus queueing behind the
+    /// previous segment.
+    static let requestTimeoutPerAudioSecond: TimeInterval = 0.75
+
+    /// Hard ceiling so a hung engine still surfaces as an error eventually.
+    static let maxRequestTimeout: TimeInterval = 600
+
+    /// Approximate audio duration from the WAV byte count.
+    static func estimatedAudioSeconds(audioBytes: Int) -> TimeInterval {
+        let payload = max(0, audioBytes - wavHeaderBytes)
+        return TimeInterval(payload) / TimeInterval(wavBytesPerSecond)
+    }
+
+    /// `/v1/audio/transcriptions` timeout scaled by audio length, so a
+    /// multi-minute dictation is not cut off client-side while the engine is
+    /// still (correctly) decoding the full transcript.
+    static func requestTimeout(audioBytes: Int) -> TimeInterval {
+        let scaled = minRequestTimeout
+            + estimatedAudioSeconds(audioBytes: audioBytes) * requestTimeoutPerAudioSecond
+        return min(maxRequestTimeout, max(minRequestTimeout, scaled))
+    }
+
+    /// Audio longer than this goes to the gateway as `batch` (180 s server-side
+    /// budget) instead of `quick` (60 s). Both modes route to the MiMo sidecar,
+    /// so the model is unchanged. Under GPU contention a long clip measured
+    /// ~0.54 s of processing per audio second (134 s clip took 73 s), so 90 s
+    /// would already sit near the 60 s quick budget; 60 s keeps the margin and
+    /// matches the 60 s windows LMC sends as `batch`.
+    /// Trade-off: `batch` has the lowest scheduler priority, so a long dictation
+    /// can queue behind an in-flight LMC re-transcribe.
+    static let batchModeThresholdSeconds: TimeInterval = 60
+
+    /// Gateway `mode` form field for a clip of this size.
+    static func gatewayMode(audioBytes: Int) -> String {
+        estimatedAudioSeconds(audioBytes: audioBytes) > batchModeThresholdSeconds ? "batch" : "quick"
     }
 
     /// GET sidecar `/v1/health` directly (NOT through gateway). Used by LocalASRServer
